@@ -1,0 +1,43 @@
+/* Wine.css */
+.conveyor-container {
+    overflow: hidden;
+    white-space: nowrap;
+    position: relative;
+    width: 100%;
+}
+
+.conveyor-track {
+    display: inline-flex;
+    animation: scroll 20s linear infinite;
+    gap: 20px;
+    /* Space between items */
+}
+
+@keyframes scroll {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(-50%);
+        /* Adjust based on duplicated content width */
+    }
+}
+
+/* Pause on hover for better UX */
+.conveyor-container:hover .conveyor-track {
+    animation-play-state: paused;
+}
+
+img {
+    width: 100px;
+    height: 100px;
+}
+
+h3 {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    margin-top: 10px;
+
+}

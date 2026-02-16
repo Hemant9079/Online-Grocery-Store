@@ -5,8 +5,14 @@ import { useNavigate } from 'react-router-dom';
 
 import Snakes from '../Snakes/Snakes';
 import ColdDrinks from '../ColdDrinks/ColdDrinks';
+import Wine from '../Wine/Wine';
+import Smoking from '../Smoking/Smoking';
 
-const Dairy = () => {
+interface DairyProps {
+  is18Plus: boolean;
+}
+
+const Dairy = ({ is18Plus }: DairyProps) => {
   const navigate = useNavigate();
 
   const dairyContainerStyle = {
@@ -22,6 +28,12 @@ const Dairy = () => {
       </div>
       <Snakes />
       <ColdDrinks />
+      {is18Plus && (
+        <>
+          <Wine />
+          <Smoking />
+        </>
+      )}
     </>
   );
 };
