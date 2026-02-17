@@ -11,6 +11,9 @@ import Toggle18Plus from './components/Toggle18Plus';
 import Bottom from './Bottom/Bottom';
 import Login from './Login/Login.tsx';
 import Signup from './Signup/Signup.tsx';
+import Cart from './Cart/Cart.tsx';
+
+import { CartProvider } from './context/CartContext';
 
 const App = () => {
   const [is18Plus, setIs18Plus] = useState(false);
@@ -19,25 +22,28 @@ const App = () => {
   const hideNavbarComponent = ['/login', '/signup'].includes(location.pathname);
 
   return (
-    <div>
-      {!hideNavbarComponent && (
-        <>
-          <Navbar />
-          <Toggle18Plus is18Plus={is18Plus} onToggle={setIs18Plus} />
-        </>
-      )}
-      <Routes>
-        <Route path="/" element={<Dairy is18Plus={is18Plus} />} />
-        <Route path="/Dairy-products" element={<Dairy_Products />} />
-        <Route path="/snakes" element={<Snakes />} />
-        <Route path="/cold-drinks" element={<ColdDrinks />} />
-        <Route path="/wine" element={<Wine />} />
-        <Route path="/smoking" element={<Smoking />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-      </Routes>
-      <Bottom />
-    </div>
+    <CartProvider>
+      <div>
+        {!hideNavbarComponent && (
+          <>
+            <Navbar />
+            <Toggle18Plus is18Plus={is18Plus} onToggle={setIs18Plus} />
+          </>
+        )}
+        <Routes>
+          <Route path="/" element={<Dairy is18Plus={is18Plus} />} />
+          <Route path="/Dairy-products" element={<Dairy_Products />} />
+          <Route path="/snakes" element={<Snakes />} />
+          <Route path="/cold-drinks" element={<ColdDrinks />} />
+          <Route path="/wine" element={<Wine />} />
+          <Route path="/smoking" element={<Smoking />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/cart" element={<Cart />} />
+        </Routes>
+        <Bottom />
+      </div>
+    </CartProvider>
   );
 };
 
