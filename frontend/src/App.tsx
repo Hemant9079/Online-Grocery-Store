@@ -12,6 +12,7 @@ import Bottom from './Bottom/Bottom';
 import Login from './Login/Login.tsx';
 import Signup from './Signup/Signup.tsx';
 import Cart from './Cart/Cart.tsx';
+import ProductDetail from './ProductDetail/ProductDetail.tsx';
 
 import { CartProvider } from './context/CartContext';
 
@@ -27,7 +28,9 @@ const App = () => {
         {!hideNavbarComponent && (
           <>
             <Navbar />
-            <Toggle18Plus is18Plus={is18Plus} onToggle={setIs18Plus} />
+            {location.pathname === '/' && (
+              <Toggle18Plus is18Plus={is18Plus} onToggle={setIs18Plus} />
+            )}
           </>
         )}
         <Routes>
@@ -40,6 +43,7 @@ const App = () => {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/cart" element={<Cart />} />
+          <Route path="/product/:id" element={<ProductDetail />} />
         </Routes>
         <Bottom />
       </div>
