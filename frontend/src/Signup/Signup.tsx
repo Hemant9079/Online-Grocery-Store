@@ -4,7 +4,7 @@ import './Signup.css';
 
 const Signup = () => {
     const [formData, setFormData] = useState({
-        name: '',
+        username: '',
         email: '',
         password: ''
     });
@@ -17,7 +17,7 @@ const Signup = () => {
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+            const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
             const response = await fetch(`${apiUrl}/api/auth/register`, {
                 method: 'POST',
                 headers: {
@@ -43,12 +43,12 @@ const Signup = () => {
             <form className="signup-form" onSubmit={handleSubmit}>
                 <h2>Sign Up</h2>
                 <div className="form-group">
-                    <label htmlFor="name">Name</label>
+                    <label htmlFor="name">Username</label>
                     <input
                         type="text"
                         id="name"
-                        name="name"
-                        value={formData.name}
+                        name="username"
+                        value={formData.username}
                         onChange={handleChange}
                         required
                     />

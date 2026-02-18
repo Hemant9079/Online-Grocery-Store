@@ -14,7 +14,7 @@ export const register = async (req, res, next) => {
         });
 
         await newUser.save();
-        res.status(200).send("User has been created.");
+        res.status(200).json({ message: "User has been created." });
     } catch (err) {
         next(err);
     }
@@ -22,15 +22,15 @@ export const register = async (req, res, next) => {
 
 export const login = async (req, res, next) => {
     try {
-        const user = await User.findOne({ username: req.body.username });
-        if (!user) return res.status(404).json("User not found!");
+        const user = await User.findOne({ email: req.body.email });
+        if (!user) return res.status(404).json({ message: "User not found!" });
 
         const isPasswordCorrect = await bcrypt.compare(
             req.body.password,
             user.password
         );
         if (!isPasswordCorrect)
-            return res.status(400).json("Wrong password or username!");
+            return res.status(400).json({ message: "Wrong password or username!" });
 
         const token = jwt.sign(
             { id: user._id, isAdmin: user.isAdmin },
@@ -43,7 +43,7 @@ export const login = async (req, res, next) => {
                 httpOnly: true,
             })
             .status(200)
-            .json({ details: { ...otherDetails }, isAdmin });
+            .json({ details: { ...otherDetails }, isAdmin, token });
     } catch (err) {
         next(err);
     }
