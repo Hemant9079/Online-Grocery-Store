@@ -1,12 +1,13 @@
-import './navbar.css'
-import logo from './logo.png'
+import './navbar.css';
+import logo from './logo.png';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useState, type ChangeEvent } from 'react';
 import { allProducts } from '../data/products';
+import ApiLocation from './ApiLocation';
 
 const Navbar = () => {
-  const { cartCount } = useCart();
+  const { cartCount, isLoggedIn, logout } = useCart();
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<typeof allProducts>([]);
   const navigate = useNavigate();
@@ -29,13 +30,14 @@ const Navbar = () => {
     setSearchTerm('');
     setSearchResults([]);
     navigate(`/product/${id}`);
-  }
+  };
 
   return (
     <div className='navbar' style={{ position: 'relative' }}>
       <img src={logo} alt="Logo" className="logo" />
-      {/* <LocationOption /> */}
-      <input type="search" name="" id="location" placeholder='select your location' />
+
+      {/* New ApiLocation component */}
+      <ApiLocation />
 
       <div className="search-container" style={{ position: 'relative' }}>
         <input
@@ -75,12 +77,18 @@ const Navbar = () => {
         )}
       </div>
 
-      <Link to="/login">Login</Link>
+      {
+        isLoggedIn ? (
+          <button onClick={logout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 'inherit', padding: 0 }}>Logout</button>
+        ) : (
+          <Link to="/login">Login</Link>
+        )
+      }
       <Link to="/cart" style={{ textDecoration: 'none', color: 'inherit' }}>
         My Cart {cartCount > 0 && <span style={{ backgroundColor: 'red', color: 'white', borderRadius: '50%', padding: '2px 6px', fontSize: '12px', marginLeft: '5px' }}>{cartCount}</span>}
       </Link>
     </div>
-  )
-}
+  );
+};
 
-export default Navbar
+export default Navbar;

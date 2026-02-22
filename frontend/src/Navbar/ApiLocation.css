@@ -1,0 +1,245 @@
+/* ===========================
+   ApiLocation Component Styles
+   =========================== */
+
+.api-location-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* ---- Navbar trigger button ---- */
+.api-location-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  border: 1.5px solid #77c150;
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  transition: background 0.2s, box-shadow 0.2s;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.api-location-btn:hover {
+  background: #edf9ea;
+  box-shadow: 0 2px 8px rgba(119, 193, 80, 0.35);
+}
+
+.api-location-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.api-location-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Popup card ---- */
+.api-location-popup {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  width: 320px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  z-index: 2000;
+  padding: 20px;
+  animation: popupFadeIn 0.2s ease;
+}
+
+@keyframes popupFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Header ---- */
+.api-location-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.api-location-popup-header h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #222;
+  margin: 0;
+}
+
+.api-location-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #888;
+  cursor: pointer;
+  transition: color 0.2s;
+  line-height: 1;
+}
+
+.api-location-close:hover {
+  color: #333;
+}
+
+/* ---- Option blocks ---- */
+.api-location-option {
+  background: #f7f9f6;
+  border: 1px solid #e0eed9;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.api-location-option-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2d6a1f;
+  margin-bottom: 10px;
+}
+
+.option-icon {
+  font-size: 18px;
+}
+
+/* ---- Manual input row ---- */
+.api-location-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.api-location-input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1.5px solid #c5e0b4;
+  border-radius: 7px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+  background: #fff;
+}
+
+.api-location-input:focus {
+  border-color: #77c150;
+}
+
+.api-location-confirm-btn {
+  padding: 8px 14px;
+  background: #77c150;
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.api-location-confirm-btn:hover:not(:disabled) {
+  background: #5da83a;
+}
+
+.api-location-confirm-btn:disabled {
+  background: #b8dba5;
+  cursor: not-allowed;
+}
+
+/* ---- Divider ---- */
+.api-location-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: #aaa;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 14px 0;
+  gap: 8px;
+}
+
+.api-location-divider::before,
+.api-location-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #ddd;
+}
+
+/* ---- Auto detect button ---- */
+.api-location-auto-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  background: linear-gradient(135deg, #77c150, #4aab2e);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.api-location-auto-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.api-location-auto-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* ---- Spinner ---- */
+.api-location-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Status messages ---- */
+.api-location-status {
+  margin-top: 8px;
+  font-size: 12px;
+  border-radius: 5px;
+  padding: 5px 8px;
+}
+
+.api-location-status.info {
+  background: #eef7e8;
+  color: #3a7d20;
+}
+
+.api-location-status.error {
+  background: #fdecea;
+  color: #c0392b;
+}

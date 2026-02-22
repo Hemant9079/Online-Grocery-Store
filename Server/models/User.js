@@ -20,6 +20,15 @@ const UserSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        cart: [
+            {
+                id: { type: Number, required: true },
+                name: String,
+                price: Number,
+                imgUrl: String,
+                quantity: { type: Number, default: 1 }
+            }
+        ]
     },
     { timestamps: true }
 );
