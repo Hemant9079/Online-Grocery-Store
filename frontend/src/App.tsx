@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Navbar from './Navbar/Navbar';
 import Dairy from './DairyProduct/Dairy';
 import Dairy_Products from './DairyProduct/Dairy_Products';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Snakes from './Snakes/Snakes';
 import Wine from './Wine/Wine';
 import ColdDrinks from './ColdDrinks/ColdDrinks';
@@ -13,19 +13,19 @@ import Login from './Login/Login.tsx';
 import Signup from './Signup/Signup.tsx';
 import Cart from './Cart/Cart.tsx';
 import ProductDetail from './ProductDetail/ProductDetail.tsx';
-
+import ProtectedRoute from './components/ProtectedRoute';
 import { CartProvider } from './context/CartContext';
 
 const App = () => {
   const [is18Plus, setIs18Plus] = useState(false);
   const location = useLocation();
 
-  const hideNavbarComponent = ['/login', '/signup'].includes(location.pathname);
+  const hideNavbar = ['/login', '/signup'].includes(location.pathname);
 
   return (
     <CartProvider>
       <div>
-        {!hideNavbarComponent && (
+        {!hideNavbar && (
           <>
             <Navbar />
             {location.pathname === '/' && (
@@ -34,16 +34,22 @@ const App = () => {
           </>
         )}
         <Routes>
-          <Route path="/" element={<Dairy is18Plus={is18Plus} />} />
-          <Route path="/Dairy-products" element={<Dairy_Products />} />
-          <Route path="/snakes" element={<Snakes />} />
-          <Route path="/cold-drinks" element={<ColdDrinks />} />
-          <Route path="/wine" element={<Wine />} />
-          <Route path="/smoking" element={<Smoking />} />
+          {/* Public routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
-          <Route path="/cart" element={<Cart />} />
-          <Route path="/product/:id" element={<ProductDetail />} />
+
+          {/* Protected routes — redirect to /login when not authenticated */}
+          <Route path="/" element={<ProtectedRoute><Dairy is18Plus={is18Plus} /></ProtectedRoute>} />
+          <Route path="/Dairy-products" element={<ProtectedRoute><Dairy_Products /></ProtectedRoute>} />
+          <Route path="/snakes" element={<ProtectedRoute><Snakes /></ProtectedRoute>} />
+          <Route path="/cold-drinks" element={<ProtectedRoute><ColdDrinks /></ProtectedRoute>} />
+          <Route path="/wine" element={<ProtectedRoute><Wine /></ProtectedRoute>} />
+          <Route path="/smoking" element={<ProtectedRoute><Smoking /></ProtectedRoute>} />
+          <Route path="/cart" element={<ProtectedRoute><Cart /></ProtectedRoute>} />
+          <Route path="/product/:id" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
+
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
         <Bottom />
       </div>
@@ -51,4 +57,4 @@ const App = () => {
   );
 };
 
-export default App
+export default App;

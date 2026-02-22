@@ -3,10 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import './Login.css';
 
 const Login = () => {
-    const [formData, setFormData] = useState({
-        email: '',
-        password: ''
-    });
+    const [formData, setFormData] = useState({ email: '', password: '' });
     const navigate = useNavigate();
 
     const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -19,15 +16,16 @@ const Login = () => {
             const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
             const response = await fetch(`${apiUrl}/api/auth/login`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(formData)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData),
             });
             const data = await response.json();
             if (response.ok) {
-                localStorage.setItem('token', data.token);
-                localStorage.setItem('user', JSON.stringify(data));
+                // sessionStorage — cleared on tab close / refresh (no auto-login)
+                sessionStorage.setItem('token', data.token);
+                sessionStorage.setItem('user', JSON.stringify(data));
+                // Signal CartContext to reload user & cart
+                window.dispatchEvent(new Event('user-logged-in'));
                 navigate('/');
             } else {
                 alert(data.message || 'Login failed');

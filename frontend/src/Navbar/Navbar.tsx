@@ -7,7 +7,7 @@ import { allProducts } from '../data/products';
 import ApiLocation from './ApiLocation';
 
 const Navbar = () => {
-  const { cartCount, isLoggedIn, logout } = useCart();
+  const { cartCount, isLoggedIn, logout, currentUser } = useCart();
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<typeof allProducts>([]);
   const navigate = useNavigate();
@@ -15,7 +15,6 @@ const Navbar = () => {
   const handleSearch = (e: ChangeEvent<HTMLInputElement>) => {
     const term = e.target.value;
     setSearchTerm(term);
-
     if (term.length > 0) {
       const filtered = allProducts.filter((product) =>
         product.name.toLowerCase().startsWith(term.toLowerCase())
@@ -36,9 +35,10 @@ const Navbar = () => {
     <div className='navbar' style={{ position: 'relative' }}>
       <img src={logo} alt="Logo" className="logo" />
 
-      {/* New ApiLocation component */}
+      {/* Location picker */}
       <ApiLocation />
 
+      {/* Product search */}
       <div className="search-container" style={{ position: 'relative' }}>
         <input
           type="search"
@@ -49,15 +49,9 @@ const Navbar = () => {
         />
         {searchResults.length > 0 && (
           <div className="search-dropdown" style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            backgroundColor: 'white',
-            border: '1px solid #ccc',
-            zIndex: 1000,
-            maxHeight: '300px',
-            overflowY: 'auto'
+            position: 'absolute', top: '100%', left: 0, right: 0,
+            backgroundColor: 'white', border: '1px solid #ccc',
+            zIndex: 1000, maxHeight: '300px', overflowY: 'auto'
           }}>
             {searchResults.map(product => (
               <div
@@ -77,15 +71,29 @@ const Navbar = () => {
         )}
       </div>
 
-      {
-        isLoggedIn ? (
-          <button onClick={logout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 'inherit', padding: 0 }}>Logout</button>
-        ) : (
-          <Link to="/login">Login</Link>
-        )
-      }
+      {/* Auth section — show username + logout after login */}
+      {isLoggedIn && currentUser ? (
+        <div className="navbar-user">
+          <div className="navbar-user-pill">
+            <span className="navbar-user-avatar">
+              {currentUser.username.charAt(0).toUpperCase()}
+            </span>
+            <span className="navbar-user-name">{currentUser.username}</span>
+          </div>
+          <button className="navbar-logout-btn" onClick={logout}>
+            Logout
+          </button>
+        </div>
+      ) : (
+        <Link to="/login">Login</Link>
+      )}
+
       <Link to="/cart" style={{ textDecoration: 'none', color: 'inherit' }}>
-        My Cart {cartCount > 0 && <span style={{ backgroundColor: 'red', color: 'white', borderRadius: '50%', padding: '2px 6px', fontSize: '12px', marginLeft: '5px' }}>{cartCount}</span>}
+        My Cart {cartCount > 0 && (
+          <span style={{ backgroundColor: 'red', color: 'white', borderRadius: '50%', padding: '2px 6px', fontSize: '12px', marginLeft: '5px' }}>
+            {cartCount}
+          </span>
+        )}
       </Link>
     </div>
   );

@@ -80,3 +80,58 @@ input[type="search"] {
   margin-right: 10px;
   width: 100%;
 }
+
+/* ---- Logged-in user section ---- */
+.navbar-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.navbar-user-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #edf9ea;
+  border: 1.5px solid #77c150;
+  border-radius: 20px;
+  padding: 5px 12px 5px 6px;
+}
+
+.navbar-user-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #77c150;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.navbar-user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2d6a1f;
+  white-space: nowrap;
+}
+
+.navbar-logout-btn {
+  background: #e74c3c;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.navbar-logout-btn:hover {
+  background: #c0392b;
+  transform: translateY(-1px);
+}

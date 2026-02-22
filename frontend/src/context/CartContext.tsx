@@ -1,4 +1,4 @@
-import { createContext, useState, useContext, type ReactNode, useEffect } from 'react';
+import { createContext, useState, useContext, type ReactNode, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 export interface CartItem {
@@ -7,6 +7,11 @@ export interface CartItem {
     price: number;
     imgUrl: string;
     quantity: number;
+}
+
+interface CurrentUser {
+    username: string;
+    email: string;
 }
 
 interface CartContextType {
@@ -19,112 +24,110 @@ interface CartContextType {
     cartCount: number;
     cartTotal: number;
     isLoggedIn: boolean;
+    currentUser: CurrentUser | null;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export const useCart = () => {
     const context = useContext(CartContext);
-    if (!context) {
-        throw new Error('useCart must be used within a CartProvider');
-    }
+    if (!context) throw new Error('useCart must be used within a CartProvider');
     return context;
 };
 
+const getApiUrl = () => import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+
+const getStoredUser = (): CurrentUser | null => {
+    try {
+        const raw = sessionStorage.getItem('user');
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const u = parsed?.user ?? parsed;
+        if (u?.username) return { username: u.username, email: u.email };
+        return null;
+    } catch { return null; }
+};
+
+const getToken = () => sessionStorage.getItem('token');
+
 export const CartProvider = ({ children }: { children: ReactNode }) => {
-    const [cartItems, setCartItems] = useState<CartItem[]>(() => {
-        const savedCart = localStorage.getItem('cartItems');
-        return savedCart ? JSON.parse(savedCart) : [];
-    });
-    const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('token'));
+    const [cartItems, setCartItems] = useState<CartItem[]>([]);
+    const [isLoggedIn, setIsLoggedIn] = useState(!!getToken());
+    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(getStoredUser);
     const navigate = useNavigate();
 
-    const getApiUrl = () => import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
-
-    // Fetch cart from server on login/mount
-    useEffect(() => {
-        const token = localStorage.getItem('token');
-        if (token) {
-            setIsLoggedIn(true);
-            fetch(`${getApiUrl()}/api/cart`, {
-                // We rely on cookie for auth if possible, OR header. 
-                // VerifyToken middleware checks req.cookies.access_token OR we can add header support.
-                // For now, let's assume cookie is used as set by Login.tsx. 
-                // Login.tsx sets cookie "access_token".
-                // Fetch needs { credentials: 'include' } to send cookies.
-                method: 'GET',
-                credentials: 'include'
-            })
-                .then(res => {
-                    if (res.ok) return res.json();
-                    throw new Error('Failed to fetch cart');
-                })
-                .then(data => {
-                    if (Array.isArray(data)) {
-                        setCartItems(data);
-                        localStorage.setItem('cartItems', JSON.stringify(data));
-                    }
-                })
-                .catch(err => console.error("Error fetching cart:", err));
-        } else {
-            setIsLoggedIn(false);
+    // Load cart from server for the current user
+    const loadCartFromServer = useCallback(async () => {
+        const token = getToken();
+        if (!token) return;
+        try {
+            const res = await fetch(`${getApiUrl()}/api/cart`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const items = Array.isArray(data) ? data : (data.cart ?? []);
+                setCartItems(items);
+            }
+        } catch (err) {
+            console.error('Failed to load cart:', err);
         }
-    }, [isLoggedIn]); // Re-run when login status changes
+    }, []);
 
     // Save cart to server
-    const saveCartToServer = async (items: CartItem[]) => {
-        const token = localStorage.getItem('token');
-        if (token) {
-            try {
-                await fetch(`${getApiUrl()}/api/cart`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify(items)
-                });
-            } catch (error) {
-                console.error("Error saving cart:", error);
-            }
+    const saveCartToServer = useCallback(async (items: CartItem[]) => {
+        const token = getToken();
+        if (!token) return;
+        try {
+            await fetch(`${getApiUrl()}/api/cart`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ cart: items }),
+            });
+        } catch (err) {
+            console.error('Failed to save cart:', err);
         }
-    };
+    }, []);
 
+    // On mount / isLoggedIn change → load this user's cart
     useEffect(() => {
-        localStorage.setItem('cartItems', JSON.stringify(cartItems));
-    }, [cartItems]);
+        if (isLoggedIn) {
+            setCurrentUser(getStoredUser());
+            loadCartFromServer();
+        } else {
+            setCurrentUser(null);
+            setCartItems([]);
+        }
+    }, [isLoggedIn, loadCartFromServer]);
 
     const addToCart = (product: Omit<CartItem, 'quantity'>) => {
-        setCartItems((prevItems) => {
-            let newItems;
-            const existingItem = prevItems.find((item) => item.id === product.id);
-            if (existingItem) {
-                newItems = prevItems.map((item) =>
-                    item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
-                );
-            } else {
-                newItems = [...prevItems, { ...product, quantity: 1 }];
-            }
-            saveCartToServer(newItems);
-            return newItems;
+        setCartItems(prev => {
+            const existing = prev.find(i => i.id === product.id);
+            const updated = existing
+                ? prev.map(i => i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i)
+                : [...prev, { ...product, quantity: 1 }];
+            saveCartToServer(updated);
+            return updated;
         });
     };
 
     const removeFromCart = (id: number) => {
-        setCartItems((prevItems) => {
-            const newItems = prevItems.filter((item) => item.id !== id);
-            saveCartToServer(newItems);
-            return newItems;
+        setCartItems(prev => {
+            const updated = prev.filter(i => i.id !== id);
+            saveCartToServer(updated);
+            return updated;
         });
     };
 
     const updateQuantity = (id: number, quantity: number) => {
-        if (quantity < 1) {
-            removeFromCart(id);
-            return;
-        }
-        setCartItems((prevItems) => {
-            const newItems = prevItems.map((item) => (item.id === id ? { ...item, quantity } : item));
-            saveCartToServer(newItems);
-            return newItems;
+        if (quantity < 1) { removeFromCart(id); return; }
+        setCartItems(prev => {
+            const updated = prev.map(i => i.id === id ? { ...i, quantity } : i);
+            saveCartToServer(updated);
+            return updated;
         });
     };
 
@@ -134,41 +137,32 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const logout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        localStorage.removeItem('cartItems');
+        sessionStorage.removeItem('token');
+        sessionStorage.removeItem('user');
         setCartItems([]);
         setIsLoggedIn(false);
-        // Clear cookie? 
-        // We can't clear httpOnly cookie from JS. We should call an API endpoint to clear it.
-        // OR just rely on token removal if token was used in header. 
-        // If cookie is used for auth, we MUST call an API to clear it.
-        // Let's assume for now removing localStorage is enough for frontend state, 
-        // but for security we should hit a logout endpoint.
-
-        // Let's add a logout endpoint call just in case or future proof it.
-        // For now, based on user request "remove automatically", clearing local state is visually sufficient.
-
+        setCurrentUser(null);
         navigate('/login');
     };
 
-    const cartCount = cartItems.reduce((total, item) => total + item.quantity, 0);
-    const cartTotal = cartItems.reduce((total, item) => total + item.price * item.quantity, 0);
+    // Expose a login trigger used by Login.tsx after successful auth
+    // (Login.tsx sets sessionStorage then calls window.dispatchEvent)
+    useEffect(() => {
+        const onLoginEvent = () => {
+            setIsLoggedIn(!!getToken());
+        };
+        window.addEventListener('user-logged-in', onLoginEvent);
+        return () => window.removeEventListener('user-logged-in', onLoginEvent);
+    }, []);
+
+    const cartCount = cartItems.reduce((t, i) => t + i.quantity, 0);
+    const cartTotal = cartItems.reduce((t, i) => t + i.price * i.quantity, 0);
 
     return (
-        <CartContext.Provider
-            value={{
-                cartItems,
-                addToCart,
-                removeFromCart,
-                updateQuantity,
-                clearCart,
-                logout,
-                cartCount,
-                cartTotal,
-                isLoggedIn
-            }}
-        >
+        <CartContext.Provider value={{
+            cartItems, addToCart, removeFromCart, updateQuantity,
+            clearCart, logout, cartCount, cartTotal, isLoggedIn, currentUser,
+        }}>
             {children}
         </CartContext.Provider>
     );
