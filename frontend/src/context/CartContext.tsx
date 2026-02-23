@@ -12,6 +12,7 @@ export interface CartItem {
 interface CurrentUser {
     username: string;
     email: string;
+    isAdmin: boolean;
 }
 
 interface CartContextType {
@@ -27,6 +28,7 @@ interface CartContextType {
     currentUser: CurrentUser | null;
     locationAddress: string;
     setLocationAddress: (addr: string) => void;
+    isAdmin: boolean;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -45,7 +47,7 @@ const getStoredUser = (): CurrentUser | null => {
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         const u = parsed?.user ?? parsed;
-        if (u?.username) return { username: u.username, email: u.email };
+        if (u?.username) return { username: u.username, email: u.email, isAdmin: u.isAdmin ?? false };
         return null;
     } catch { return null; }
 };
@@ -161,11 +163,13 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     const cartCount = cartItems.reduce((t, i) => t + i.quantity, 0);
     const cartTotal = cartItems.reduce((t, i) => t + i.price * i.quantity, 0);
 
+    const isAdmin = currentUser?.isAdmin ?? false;
+
     return (
         <CartContext.Provider value={{
             cartItems, addToCart, removeFromCart, updateQuantity,
             clearCart, logout, cartCount, cartTotal, isLoggedIn, currentUser,
-            locationAddress, setLocationAddress,
+            locationAddress, setLocationAddress, isAdmin,
         }}>
             {children}
         </CartContext.Provider>

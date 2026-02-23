@@ -4,6 +4,7 @@ import './Login.css';
 
 const Login = () => {
     const [formData, setFormData] = useState({ email: '', password: '' });
+    const [adminMode, setAdminMode] = useState(false);
     const navigate = useNavigate();
 
     const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -21,6 +22,10 @@ const Login = () => {
             });
             const data = await response.json();
             if (response.ok) {
+                if (adminMode && !data.user?.isAdmin) {
+                    alert('This account does not have admin privileges.');
+                    return;
+                }
                 sessionStorage.setItem('token', data.token);
                 sessionStorage.setItem('user', JSON.stringify(data));
                 window.dispatchEvent(new Event('user-logged-in'));
@@ -100,10 +105,28 @@ const Login = () => {
                         </div>
 
                         <button type="submit" className="auth-submit-btn">
-                            Sign In
+                            {adminMode ? '🛡️ Admin Sign In' : 'Sign In'}
                             <span className="material-symbols-outlined"></span>
                         </button>
                     </form>
+
+                    {/* Admin mode toggle */}
+                    <div style={{ textAlign: 'center', marginTop: '12px' }}>
+                        <button
+                            type="button"
+                            onClick={() => setAdminMode(m => !m)}
+                            style={{
+                                background: 'none', border: 'none', cursor: 'pointer',
+                                fontSize: '0.82rem', fontWeight: 600,
+                                color: adminMode ? '#16a34a' : '#9ca3af',
+                                textDecoration: 'underline',
+                                fontFamily: 'inherit',
+                                transition: 'color 0.2s',
+                            }}
+                        >
+                            {adminMode ? '← Back to User Login' : '🛡️ Admin Login'}
+                        </button>
+                    </div>
 
                     {/* Divider */}
                     <div className="auth-divider">

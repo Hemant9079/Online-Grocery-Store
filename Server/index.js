@@ -11,6 +11,7 @@ import cartRoutes from "./routes/cartRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 dotenv.config();
 
@@ -35,6 +36,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/order", orderRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Health check
 app.get("/", (req, res) => {
