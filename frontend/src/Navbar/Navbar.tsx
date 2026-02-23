@@ -139,6 +139,10 @@ const Navbar = () => {
           <Link to="/login">Login</Link>
         )}
 
+        <Link to="/order-history" style={{ textDecoration: 'none', color: 'inherit', whiteSpace: 'nowrap' }}>
+          📦 My Orders
+        </Link>
+
         <Link to="/cart" style={{ textDecoration: 'none', color: 'inherit' }}>
           My Cart {cartCount > 0 && (
             <span style={{ backgroundColor: 'red', color: 'white', borderRadius: '50%', padding: '2px 6px', fontSize: '12px', marginLeft: '5px' }}>

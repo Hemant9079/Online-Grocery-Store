@@ -66,9 +66,14 @@ const OrderConfirm = () => {
                     <h1>Order Confirmed!</h1>
                     <p>Your bill has been sent to <strong>{user.email}</strong></p>
                     <p className="oc-success-sub">Check your inbox for the receipt.</p>
-                    <button className="oc-home-btn" onClick={() => navigate('/')}>
-                        Continue Shopping →
-                    </button>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
+                        <button className="oc-home-btn" onClick={() => navigate('/order-history')} style={{ background: 'linear-gradient(135deg,#15803d,#16a34a)' }}>
+                            📦 View My Orders
+                        </button>
+                        <button className="oc-home-btn" onClick={() => navigate('/')} style={{ background: '#6b7280' }}>
+                            Continue Shopping →
+                        </button>
+                    </div>
                 </div>
             </div>
         );

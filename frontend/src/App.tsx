@@ -6,6 +6,7 @@ import Snakes_Products from './Snakes/Snakes_Products';
 import ColdDrinks_Products from './ColdDrinks/ColdDrinks_Products';
 import Wine_Products from './Wine/Wine_Products';
 import Smoking_Products from './Smoking/Smoking_Products';
+import OrderHistory from './OrderHistory/OrderHistory';
 import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Snakes from './Snakes/Snakes';
 import Wine from './Wine/Wine';
@@ -56,6 +57,7 @@ const AppInner = () => {
         <Route path="/wine-products" element={<ProtectedRoute><Wine_Products /></ProtectedRoute>} />
         <Route path="/smoking" element={<ProtectedRoute><Smoking /></ProtectedRoute>} />
         <Route path="/smoking-products" element={<ProtectedRoute><Smoking_Products /></ProtectedRoute>} />
+        <Route path="/order-history" element={<ProtectedRoute><OrderHistory /></ProtectedRoute>} />
         <Route path="/cart" element={<ProtectedRoute><Cart /></ProtectedRoute>} />
         <Route path="/product/:id" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
         <Route path="/order-confirm" element={<ProtectedRoute><OrderConfirm /></ProtectedRoute>} />

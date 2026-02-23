@@ -87,9 +87,10 @@ const Cart = () => {
                     netbanking: true,
                     wallet: true,
                 },
-                handler: (response) => {
-                    alert(`🎉 Payment Successful!\nPayment ID: ${response.razorpay_payment_id}`);
-                    clearCart();
+                handler: (_response) => {
+                    // Payment successful — navigate to order confirm to collect address,
+                    // save order to DB and send confirmation email
+                    navigate('/order-confirm', { state: { paymentMethod: 'online' } });
                 },
                 theme: { color: '#77c150' },
             };
