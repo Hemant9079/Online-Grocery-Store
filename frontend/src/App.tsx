@@ -15,12 +15,13 @@ import Cart from './Cart/Cart.tsx';
 import ProductDetail from './ProductDetail/ProductDetail.tsx';
 import ProtectedRoute from './components/ProtectedRoute';
 import { CartProvider } from './context/CartContext';
+import OrderConfirm from './OrderConfirm/OrderConfirm.tsx';
 
 const App = () => {
   const [is18Plus, setIs18Plus] = useState(false);
   const location = useLocation();
 
-  const hideNavbar = ['/login', '/signup'].includes(location.pathname);
+  const hideNavbar = ['/login', '/signup', '/order-confirm'].includes(location.pathname);
 
   return (
     <CartProvider>
@@ -47,6 +48,7 @@ const App = () => {
           <Route path="/smoking" element={<ProtectedRoute><Smoking /></ProtectedRoute>} />
           <Route path="/cart" element={<ProtectedRoute><Cart /></ProtectedRoute>} />
           <Route path="/product/:id" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
+          <Route path="/order-confirm" element={<ProtectedRoute><OrderConfirm /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/login" replace />} />

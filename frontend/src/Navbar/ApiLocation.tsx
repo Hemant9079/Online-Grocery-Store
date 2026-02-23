@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import './ApiLocation.css';
+import { useCart } from '../context/CartContext';
 
 interface LocationState {
     display: string;
@@ -8,6 +9,7 @@ interface LocationState {
 }
 
 const ApiLocation = () => {
+    const { setLocationAddress } = useCart();
     const [popupOpen, setPopupOpen] = useState(false);
     const [manualInput, setManualInput] = useState('');
     const [location, setLocation] = useState<LocationState>({ display: '', lat: null, lon: null });
@@ -34,16 +36,16 @@ const ApiLocation = () => {
             );
             const data = await res.json();
             if (data && data.length > 0) {
-                setLocation({
-                    display: data[0].display_name,
-                    lat: parseFloat(data[0].lat),
-                    lon: parseFloat(data[0].lon),
-                });
+                const display = data[0].display_name;
+                setLocation({ display, lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
+                setLocationAddress(display);
             } else {
                 setLocation({ display: manualInput, lat: null, lon: null });
+                setLocationAddress(manualInput);
             }
         } catch {
             setLocation({ display: manualInput, lat: null, lon: null });
+            setLocationAddress(manualInput);
         }
         setManualInput('');
         setPopupOpen(false);
@@ -68,11 +70,14 @@ const ApiLocation = () => {
                     const data = await res.json();
                     const display = data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
                     setLocation({ display, lat, lon });
+                    setLocationAddress(display);
                     setAutoStatus('success');
                     setAutoMessage('');
                     setPopupOpen(false);
                 } catch {
-                    setLocation({ display: `${lat.toFixed(4)}, ${lon.toFixed(4)}`, lat, lon });
+                    const display = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                    setLocation({ display, lat, lon });
+                    setLocationAddress(display);
                     setAutoStatus('success');
                     setAutoMessage('');
                     setPopupOpen(false);

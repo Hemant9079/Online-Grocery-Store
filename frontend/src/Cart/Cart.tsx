@@ -1,5 +1,6 @@
 import { useCart } from '../context/CartContext';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // Extend Window type for Razorpay
 declare global {
@@ -42,6 +43,7 @@ const loadRazorpayScript = (): Promise<boolean> =>
 const Cart = () => {
     const { cartItems, removeFromCart, updateQuantity, clearCart, cartTotal, currentUser } = useCart();
     const [paying, setPaying] = useState(false);
+    const navigate = useNavigate();
 
     const handlePayment = async () => {
         if (cartItems.length === 0) return;
@@ -158,11 +160,26 @@ const Cart = () => {
                     <span style={{ fontSize: '18px', color: '#555' }}>Total Amount</span>
                     <strong style={{ fontSize: '22px', color: '#2d6a1f' }}>Rs {cartTotal}</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', flexWrap: 'wrap' }}>
                     <button onClick={clearCart}
                         style={{ padding: '10px 20px', backgroundColor: '#666', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
                         Clear Cart
                     </button>
+
+                    {/* Pay on Delivery */}
+                    <button
+                        onClick={() => navigate('/order-confirm', { state: { paymentMethod: 'cod' } })}
+                        style={{
+                            padding: '10px 24px',
+                            backgroundColor: '#f97316',
+                            color: 'white', border: 'none', borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontWeight: 700, fontSize: '15px',
+                        }}>
+                        🚚 Pay on Delivery
+                    </button>
+
+                    {/* Pay Online via Razorpay */}
                     <button
                         onClick={handlePayment}
                         disabled={paying}

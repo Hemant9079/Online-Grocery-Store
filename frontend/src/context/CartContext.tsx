@@ -25,6 +25,8 @@ interface CartContextType {
     cartTotal: number;
     isLoggedIn: boolean;
     currentUser: CurrentUser | null;
+    locationAddress: string;
+    setLocationAddress: (addr: string) => void;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -54,6 +56,7 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     const [cartItems, setCartItems] = useState<CartItem[]>([]);
     const [isLoggedIn, setIsLoggedIn] = useState(!!getToken());
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(getStoredUser);
+    const [locationAddress, setLocationAddress] = useState('');
     const navigate = useNavigate();
 
     // Load cart from server for the current user
@@ -162,6 +165,7 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
         <CartContext.Provider value={{
             cartItems, addToCart, removeFromCart, updateQuantity,
             clearCart, logout, cartCount, cartTotal, isLoggedIn, currentUser,
+            locationAddress, setLocationAddress,
         }}>
             {children}
         </CartContext.Provider>

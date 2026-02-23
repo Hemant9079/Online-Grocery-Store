@@ -97,7 +97,7 @@ export const allProducts = [
     { id: 35, name: 'Turbo Beer', price: 130, imgUrl: turbo, category: 'Wine' },
 
     // Smoking
-    { id: 36, name: 'Bidi', price: 50, imgUrl: bidi, category: 'Smoking' },
+    { id: 36, name: 'Bidi', price: 1, imgUrl: bidi, category: 'Smoking' },
     { id: 37, name: 'Chhoti Advance', price: 120, imgUrl: chhotiAdvance, category: 'Smoking' },
     { id: 38, name: 'Marlboro', price: 350, imgUrl: mallBoro, category: 'Smoking' },
     { id: 39, name: 'Menthol for Women', price: 200, imgUrl: mentholWomen, category: 'Smoking' },
