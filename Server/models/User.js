@@ -14,7 +14,15 @@ const UserSchema = new mongoose.Schema(
         },
         password: {
             type: String,
-            required: true,
+            required: false,
+        },
+        googleId: {
+            type: String,
+            unique: true,
+            sparse: true,
+        },
+        profilePicture: {
+            type: String,
         },
         isAdmin: {
             type: Boolean,

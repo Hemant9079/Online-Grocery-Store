@@ -1,46 +1,56 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import morgan from 'morgan';
-import helmet from 'helmet';
+import express from "express";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
 import cookieParser from "cookie-parser";
-import connectDB from './config/db.js';
-import authRoutes from './routes/authRoutes.js';
-import productRoutes from './routes/productRoutes.js';
-import cartRoutes from './routes/cartRoutes.js';
+
+import authRoutes from "./routes/authRoutes.js";
+import cartRoutes from "./routes/cartRoutes.js";
+import productRoutes from "./routes/productRoutes.js";
+import paymentRoutes from "./routes/paymentRoutes.js";
+import orderRoutes from "./routes/orderRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 dotenv.config();
 
-connectDB();
-
 const app = express();
-
-app.use(express.json());
-app.use(cookieParser());
-app.use(cors({
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
-    credentials: true
-}));
-app.use(helmet());
-app.use(morgan('dev'));
-
-app.use('/api/auth', authRoutes);
-app.use('/api/products', productRoutes);
-app.use('/api/cart', cartRoutes);
-
-app.use((err, req, res, next) => {
-    const errorStatus = err.status || 500;
-    const errorMessage = err.message || "Something went wrong!";
-    return res.status(errorStatus).json({
-        success: false,
-        status: errorStatus,
-        message: errorMessage,
-        stack: err.stack,
-    });
-});
-
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+// Middleware
+app.use(helmet());
+app.use(morgan("dev"));
+app.use(cookieParser());
+app.use(express.json());
+app.use(
+    cors({
+        origin: "http://localhost:5173",
+        credentials: true,
+    })
+);
+
+// Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/payment", paymentRoutes);
+app.use("/api/order", orderRoutes);
+app.use("/api/admin", adminRoutes);
+
+// Health check
+app.get("/", (req, res) => {
+    res.json({ message: "Online Grocery Store API is running 🛒" });
 });
+
+// Connect DB and start server
+mongoose
+    .connect(process.env.MONGO_URI)
+    .then(() => {
+        console.log("✅ MongoDB connected");
+        app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    })
+    .catch((err) => {
+        console.error("❌ MongoDB connection error:", err.message);
+        process.exit(1);
+    });
