@@ -3,11 +3,13 @@ import { allProducts } from '../data/products';
 import './Wine.css';
 import { useDynamicProducts, invalidateDynamicProductsCache } from '../hooks/useDynamicProducts';
 import { useCart } from '../context/CartContext';
+import { useNavigate } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 const Wine = () => {
     const { isAdmin } = useCart();
+    const navigate = useNavigate();
     const staticProducts = allProducts.filter(p => p.category === 'Wine');
     const { products: dynamic } = useDynamicProducts('Wine');
 
@@ -27,7 +29,12 @@ const Wine = () => {
 
     return (
         <div className="conveyor-container">
-            <h3>Best Wines &amp; Beers</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px' }}>
+                <h3>Best Wines &amp; Beers</h3>
+                <button onClick={() => navigate('/wine-products')} style={{ backgroundColor: 'green', color: 'white', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
+                    View Products
+                </button>
+            </div>
             <div className="conveyor-track">
                 {[...all, ...all].map((product, index) => (
                     <Lists

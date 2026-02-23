@@ -3,11 +3,13 @@ import { allProducts } from '../data/products';
 import './Smoking.css';
 import { useDynamicProducts, invalidateDynamicProductsCache } from '../hooks/useDynamicProducts';
 import { useCart } from '../context/CartContext';
+import { useNavigate } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 const Smoking = () => {
     const { isAdmin } = useCart();
+    const navigate = useNavigate();
     const staticProducts = allProducts.filter(p => p.category === 'Smoking');
     const { products: dynamic } = useDynamicProducts('Smoking');
 
@@ -27,7 +29,12 @@ const Smoking = () => {
 
     return (
         <div className="conveyor-container">
-            <h3>Smoking Essentials</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px' }}>
+                <h3>Smoking Essentials</h3>
+                <button onClick={() => navigate('/smoking-products')} style={{ backgroundColor: 'green', color: 'white', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
+                    View Products
+                </button>
+            </div>
             <div className="conveyor-track">
                 {[...all, ...all].map((product, index) => (
                     <Lists
