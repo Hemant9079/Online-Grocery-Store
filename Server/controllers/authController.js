@@ -73,3 +73,70 @@ export const login = async (req, res) => {
         res.status(500).json({ message: "Server error", error: err.message });
     }
 };
+
+// POST /api/auth/google-login
+export const googleLogin = async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token) return res.status(400).json({ message: "Token is required" });
+
+        // Verify the access token with Google UserInfo endpoint
+        const googleRes = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (!googleRes.ok) throw new Error("Invalid Google Token");
+
+        const info = await googleRes.json();
+        const { sub: googleId, email, name, picture } = info;
+
+        let user = await User.findOne({ email });
+
+        if (user) {
+            // Link googleId if this email was registered manually before
+            if (!user.googleId) {
+                user.googleId = googleId;
+                user.profilePicture = picture;
+                await user.save();
+            }
+        } else {
+            // Create a new user for first-time Google login
+            const randomPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8);
+            const hashedPassword = await bcrypt.hash(randomPassword, 10);
+            user = await User.create({
+                username: name || email.split("@")[0],
+                email,
+                password: hashedPassword,
+                googleId,
+                profilePicture: picture,
+            });
+        }
+
+        const jwtToken = jwt.sign(
+            { id: user._id, isAdmin: user.isAdmin },
+            process.env.JWT_SECRET,
+            { expiresIn: "7d" }
+        );
+
+        res.cookie("token", jwtToken, {
+                httpOnly: true,
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+                sameSite: "lax",
+            })
+            .json({
+                message: "Google login successful",
+                user: {
+                    id: user._id,
+                    username: user.username,
+                    email: user.email,
+                    isAdmin: user.isAdmin,
+                    profilePicture: user.profilePicture
+                },
+                token: jwtToken,
+            });
+
+    } catch (err) {
+        console.error("Google Login Error:", err);
+        res.status(500).json({ message: "Google login failed", error: err.message });
+    }
+};
