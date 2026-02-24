@@ -58,6 +58,7 @@ router.post('/products', ...adminGuard, async (req, res) => {
         });
         res.status(201).json({ message: 'Product added.', product });
     } catch (err) {
+        console.error("Error in add product:", err); // Added debug log
         if (err.name === 'ValidationError')
             return res.status(400).json({ message: err.message });
         res.status(500).json({ message: 'Server error', error: err.message });

@@ -8,7 +8,7 @@ const ProductSchema = new mongoose.Schema(
         category: {
             type: String,
             required: true,
-            enum: ['Dairy', 'Snakes', 'ColdDrinks', 'Wine', 'Smoking'],
+            enum: ['Dairy', 'Snacks', 'ColdDrinks', 'Wine', 'Smoking', 'Snakes'], // Keep Snakes for backward compat if needed, add Snacks
         },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },
