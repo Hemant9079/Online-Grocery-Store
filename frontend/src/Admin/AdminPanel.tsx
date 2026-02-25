@@ -44,7 +44,7 @@ const AdminPanel = ({ onClose, onProductAdded }: Props) => {
                 invalidateDynamicProductsCache();
                 onProductAdded(); // tell parent to refresh
             } else {
-                setErr(data.message || 'Failed to add product.');
+                setErr(data.error || data.message || 'Failed to add product.'); // Show detailed error if available
             }
         } catch { setErr('Network error. Please try again.'); }
         finally { setAdding(false); }

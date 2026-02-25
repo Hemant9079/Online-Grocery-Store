@@ -8,6 +8,43 @@ const Login = () => {
     const [adminMode, setAdminMode] = useState(false);
     const navigate = useNavigate();
 
+    // ── Forgot-password modal state ──
+    const [showForgotModal, setShowForgotModal] = useState(false);
+    const [fpEmail, setFpEmail] = useState('');
+    const [fpStatus, setFpStatus] = useState<'idle' | 'loading' | 'sent' | 'error'>('idle');
+    const [fpMessage, setFpMessage] = useState('');
+
+    const handleForgotSubmit = async (e: FormEvent) => {
+        e.preventDefault();
+        setFpStatus('loading');
+        try {
+            const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+            const res = await fetch(`${apiUrl}/api/auth/forgot-password`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: fpEmail }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setFpStatus('sent');
+                setFpMessage(data.message || 'Reset link sent! Check your inbox.');
+            } else {
+                setFpStatus('error');
+                setFpMessage(data.message || 'Something went wrong. Please try again.');
+            }
+        } catch {
+            setFpStatus('error');
+            setFpMessage('Network error. Please check your connection.');
+        }
+    };
+
+    const closeForgotModal = () => {
+        setShowForgotModal(false);
+        setFpEmail('');
+        setFpStatus('idle');
+        setFpMessage('');
+    };
+
     const loginWithGoogle = useGoogleLogin({
         onSuccess: async (tokenResponse) => {
             try {
@@ -67,6 +104,7 @@ const Login = () => {
     };
 
     return (
+        <>
         <div className="auth-page">
             {/* ── LEFT: Illustration ── */}
             <div className="auth-left">
@@ -115,7 +153,11 @@ const Login = () => {
                         <div className="auth-field">
                             <div className="auth-field-header">
                                 <label htmlFor="password">Password</label>
-                                <a href="#" className="auth-forgot">Forgot Password?</a>
+                                <button
+                                    type="button"
+                                    className="auth-forgot"
+                                    onClick={() => setShowForgotModal(true)}
+                                >Forgot Password?</button>
                             </div>
                             <div className="auth-input-wrap">
                                 <span className="material-symbols-outlined auth-field-icon"></span>
@@ -187,6 +229,56 @@ const Login = () => {
                 </div>
             </div>
         </div>
+
+        {/* ── Forgot Password Modal ── */}
+        {showForgotModal && (
+            <div className="fp-overlay" onClick={closeForgotModal}>
+                <div className="fp-modal" onClick={e => e.stopPropagation()}>
+                    <button className="fp-close" onClick={closeForgotModal} aria-label="Close">✕</button>
+
+                    <div className="fp-icon">🔑</div>
+                    <h2 className="fp-title">Forgot Password?</h2>
+                    <p className="fp-subtitle">Enter your registered email and we'll send you a reset link.</p>
+
+                    {fpStatus === 'sent' ? (
+                        <div className="fp-banner fp-banner--success">
+                            ✅ {fpMessage}
+                        </div>
+                    ) : (
+                        <form onSubmit={handleForgotSubmit} className="fp-form">
+                            <div className="auth-field">
+                                <label htmlFor="fp-email">Email Address</label>
+                                <div className="auth-input-wrap">
+                                    <span className="material-symbols-outlined auth-field-icon"></span>
+                                    <input
+                                        type="email"
+                                        id="fp-email"
+                                        placeholder="name@company.com"
+                                        value={fpEmail}
+                                        onChange={e => setFpEmail(e.target.value)}
+                                        required
+                                        autoFocus
+                                    />
+                                </div>
+                            </div>
+
+                            {fpStatus === 'error' && (
+                                <div className="fp-banner fp-banner--error">⚠️ {fpMessage}</div>
+                            )}
+
+                            <button
+                                type="submit"
+                                className="auth-submit-btn"
+                                disabled={fpStatus === 'loading'}
+                            >
+                                {fpStatus === 'loading' ? 'Sending…' : 'Send Reset Link'}
+                            </button>
+                        </form>
+                    )}
+                </div>
+            </div>
+        )}
+        </>
     );
 };
 

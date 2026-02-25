@@ -1,18 +1,33 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
-const ProductSchema = new mongoose.Schema(
-    {
-        name: { type: String, required: true, trim: true },
-        price: { type: Number, required: true, min: 0 },
-        imgUrl: { type: String, required: true },
-        category: {
-            type: String,
-            required: true,
-            enum: ['Dairy', 'Snakes', 'ColdDrinks', 'Wine', 'Smoking'],
-        },
-        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+const productSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
     },
-    { timestamps: true }
+    price: {
+      type: Number,
+      required: true,
+    },
+    imgUrl: {
+      type: String,
+      required: true,
+    },
+    category: {
+      type: String,
+      required: true,
+    },
+    description: {
+      type: String,
+    },
+    stock: {
+      type: Number,
+      default: 0,
+    },
+  },
+  { timestamps: true }
 );
 
-export default mongoose.model('Product', ProductSchema);
+const Product = mongoose.model("Product", productSchema);
+export default Product;

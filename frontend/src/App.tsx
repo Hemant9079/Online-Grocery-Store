@@ -16,6 +16,7 @@ import Toggle18Plus from './components/Toggle18Plus';
 import Bottom from './Bottom/Bottom';
 import Login from './Login/Login.tsx';
 import Signup from './Signup/Signup.tsx';
+import ResetPassword from './Login/ResetPassword.tsx';
 import Cart from './Cart/Cart.tsx';
 import ProductDetail from './ProductDetail/ProductDetail.tsx';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -29,7 +30,7 @@ const AppInner = () => {
   const location = useLocation();
   const { isAdmin } = useCart();
 
-  const hideNavbar = ['/login', '/signup', '/order-confirm', '/admin'].includes(location.pathname);
+  const hideNavbar = ['/login', '/signup', '/order-confirm', '/admin', '/reset-password'].includes(location.pathname);
 
   return (
     <div>
@@ -45,6 +46,7 @@ const AppInner = () => {
         {/* Public routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         {/* Protected routes — redirect to /login when not authenticated */}
         <Route path="/" element={<ProtectedRoute><Dairy is18Plus={is18Plus} /></ProtectedRoute>} />

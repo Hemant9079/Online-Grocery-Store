@@ -32,7 +32,7 @@ const ColdDrinks_Products = () => {
                     id={product.id}
                     name={product.name}
                     price={product.price}
-                    imgUrl={product.imgUrl}
+                    imgUrl={product.imgUrl}  
                     onDelete={isAdmin && product.dynId ? () => handleDelete(product.dynId!) : undefined}
                 />
             ))}

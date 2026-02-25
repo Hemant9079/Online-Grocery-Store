@@ -17,7 +17,7 @@ router.post('/confirm', verifyToken, async (req, res) => {
     let savedOrder;
     try {
         savedOrder = await Order.create({
-            userId: req.user.id,
+            user: req.user.id,
             userEmail,
             userName: userName || 'Customer',
             items,
@@ -113,6 +113,9 @@ router.post('/confirm', verifyToken, async (req, res) => {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS,
             },
+            tls: {
+                rejectUnauthorized: false
+            }
         });
 
         await transporter.sendMail({
@@ -133,7 +136,7 @@ router.post('/confirm', verifyToken, async (req, res) => {
 // GET /api/order/history — get all orders for the logged-in user
 router.get('/history', verifyToken, async (req, res) => {
     try {
-        const orders = await Order.find({ userId: req.user.id })
+        const orders = await Order.find({ user: req.user.id })
             .sort({ createdAt: -1 });
         res.json(orders);
     } catch (err) {
@@ -151,7 +154,7 @@ router.patch('/:id/status', verifyToken, async (req, res) => {
     }
     try {
         const order = await Order.findOneAndUpdate(
-            { _id: req.params.id, userId: req.user.id },
+            { _id: req.params.id, user: req.user.id },
             { status },
             { new: true }
         );
