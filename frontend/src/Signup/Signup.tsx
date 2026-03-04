@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useGoogleLogin } from '@react-oauth/google';
+import API_URL from '../config';
 import './Signup.css';
 
 const Signup = () => {
@@ -14,7 +15,7 @@ const Signup = () => {
     const signupWithGoogle = useGoogleLogin({
         onSuccess: async (tokenResponse) => {
             try {
-                const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+                const apiUrl = API_URL;
                 const res = await fetch(`${apiUrl}/api/auth/google-login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -44,7 +45,7 @@ const Signup = () => {
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+            const apiUrl = API_URL;
             const response = await fetch(`${apiUrl}/api/auth/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

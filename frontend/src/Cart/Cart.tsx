@@ -27,7 +27,7 @@ interface RazorpayOptions {
 }
 
 const RAZORPAY_KEY_ID = 'rzp_test_SJ1piYlFgtlvBS';
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+import API_URL from '../config';
 
 const loadRazorpayScript = (): Promise<boolean> =>
     new Promise((resolve) => {

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { invalidateDynamicProductsCache } from '../hooks/useDynamicProducts';
+import API_URL from '../config';
 import './AdminPanel.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 const CATEGORIES = ['Dairy', 'Snacks', 'ColdDrinks', 'Wine', 'Smoking'];
 
 interface Props {

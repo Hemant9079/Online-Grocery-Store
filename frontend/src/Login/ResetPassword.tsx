@@ -1,5 +1,6 @@
 ﻿import { useState, type FormEvent } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import API_URL from '../config';
 import './ResetPassword.css';
 
 const ResetPassword = () => {
@@ -33,7 +34,7 @@ const ResetPassword = () => {
         if (newPassword.length < 6) { setStatus('error'); setMessage('Password must be at least 6 characters.'); return; }
         setStatus('loading');
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+            const apiUrl = API_URL;
             const res = await fetch(`${apiUrl}/api/auth/reset-password`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

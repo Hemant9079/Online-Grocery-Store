@@ -39,7 +39,9 @@ export const useCart = () => {
     return context;
 };
 
-const getApiUrl = () => import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+import API_URL from '../config';
+
+const getApiUrl = () => API_URL;
 
 const getStoredUser = (): CurrentUser | null => {
     try {

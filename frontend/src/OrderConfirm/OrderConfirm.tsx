@@ -1,9 +1,8 @@
 import { useCart } from '../context/CartContext';
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import API_URL from '../config';
 import './OrderConfirm.css';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 const OrderConfirm = () => {
     const { cartItems, cartTotal, clearCart, currentUser, locationAddress } = useCart();
