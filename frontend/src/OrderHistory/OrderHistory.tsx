@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import API_URL from '../config';
 import './OrderHistory.css';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 const TRACKING_STEPS = ['Order Placed', 'Processing', 'Out for Delivery', 'Delivered'] as const;
 type TrackingStatus = typeof TRACKING_STEPS[number];

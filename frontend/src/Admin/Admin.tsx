@@ -2,9 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { invalidateDynamicProductsCache } from '../hooks/useDynamicProducts';
+import API_URL from '../config';
 import './Admin.css';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
 
 interface DBProduct {
     _id: string;
