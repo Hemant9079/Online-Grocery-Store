@@ -4,7 +4,7 @@ pipeline {
     environment {
         IMAGE_NAME = 'grocery-backend'
         CONTAINER_NAME = 'grocery-backend-container'
-        ENV_FILE = 'Server/.env'
+        ENV_FILE = '/var/jenkins_home/secrets/grocery-backend.env'
     }
 
     stages {
