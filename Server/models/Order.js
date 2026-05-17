@@ -31,7 +31,7 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      default: "Pending", // Pending, Processing, Shipped, Delivered, Cancelled
+      default: "Order Placed",
     },
   },
   { timestamps: true }
