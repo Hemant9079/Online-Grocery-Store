@@ -49,9 +49,13 @@ pipeline {
 
         stage('Health Check') {
             steps {
-                // Give container a moment to start, then verify it is responding
+                // Jenkins runs inside Docker, so 'localhost' = Jenkins container
+                // Backend is exposed on host at 172.17.0.1 (Docker host gateway)
                 sh 'sleep 5'
-                sh 'curl -f http://localhost:5000/ || (echo "Health check failed!" && exit 1)'
+                sh '''
+                    HOST_IP=$(ip route | grep default | awk \'{print $3}\')
+                    curl -f http://${HOST_IP}:5000/ || (echo "Health check failed!" && exit 1)
+                '''
             }
         }
     }
