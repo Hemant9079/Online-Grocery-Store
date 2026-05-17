@@ -20,6 +20,14 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    googleId: {
+      type: String,
+      default: null,
+    },
+    profilePicture: {
+      type: String,
+      default: null,
+    },
     cart: {
       type: Array,
       default: [],
