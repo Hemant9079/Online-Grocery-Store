@@ -1,0 +1,386 @@
+# =============================================================================
+# FILE: aws/cloudformation/01-vpc.yaml
+# PURPOSE: Creates the entire network foundation for the Online Grocery Store
+#          on AWS. This includes the VPC, all subnets, Internet Gateway,
+#          NAT Gateway, and Route Tables.
+#
+# WHAT THIS CREATES:
+#   - 1 VPC (Virtual Private Cloud) — isolated network for our app
+#   - 2 Public Subnets (in 2 different AZs for high availability)
+#   - 2 Private Subnets (for ECS backend containers — no direct internet)
+#   - 2 Database Subnets (for MongoDB/DocumentDB — most secure, isolated)
+#   - 1 Internet Gateway (allows public subnets to reach the internet)
+#   - 1 NAT Gateway (allows private subnets to reach internet for updates)
+#   - Route Tables (define how traffic flows between subnets)
+#
+# REGION: ap-south-1 (Mumbai) — closest to Indian users
+# DEPLOY: aws cloudformation deploy --template-file aws/cloudformation/01-vpc.yaml
+#         --stack-name grocery-vpc --capabilities CAPABILITY_NAMED_IAM
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  VPC Infrastructure for Online Grocery Store.
+  Creates a production-grade network with public, private, and database subnets
+  spread across 2 Availability Zones for high availability.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARAMETERS — Values you can customize when deploying this stack
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+    Description: >
+      Name prefix for all AWS resources created by this stack.
+      Resources will be named like: grocery-store-vpc, grocery-store-public-subnet-1, etc.
+
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: >
+      IP address range for the entire VPC.
+      /16 gives us 65,536 IP addresses to work with.
+      All subnets must be within this range.
+
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: >
+      IP range for Public Subnet in Availability Zone 1 (ap-south-1a).
+      Hosts: ALB (Load Balancer) and NAT Gateway.
+      /24 = 256 IP addresses.
+
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: >
+      IP range for Public Subnet in Availability Zone 2 (ap-south-1b).
+      Second public subnet for ALB high availability (ALB needs 2 AZs minimum).
+
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: >
+      IP range for Private Subnet in AZ1.
+      Hosts: ECS Fargate tasks (Node.js backend containers).
+      No direct internet access — traffic goes through NAT Gateway.
+
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: >
+      IP range for Private Subnet in AZ2.
+      Second ECS subnet for high availability — if AZ1 goes down, AZ2 handles traffic.
+
+  DatabaseSubnet1CIDR:
+    Type: String
+    Default: 10.0.5.0/24
+    Description: >
+      IP range for Database Subnet in AZ1.
+      Most isolated subnet — no internet access at all.
+      Used for DocumentDB or RDS if we move away from MongoDB Atlas.
+
+  DatabaseSubnet2CIDR:
+    Type: String
+    Default: 10.0.6.0/24
+    Description: >
+      IP range for Database Subnet in AZ2.
+      Second DB subnet for multi-AZ database replication.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESOURCES — The actual AWS infrastructure being created
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ===========================================================================
+  # VPC — The main container for all our networking resources
+  # Think of it as our private datacenter on AWS
+  # ===========================================================================
+  GroceryVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true   # Allows EC2/ECS instances to get DNS names
+      EnableDnsSupport: true     # Enables DNS resolution within the VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vpc'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # INTERNET GATEWAY — Connects our VPC to the public internet
+  # Required for: ALB to receive requests, ECS to pull images on first deploy
+  # Without this, nothing in the VPC can reach the internet
+  # ===========================================================================
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-igw'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Attach the Internet Gateway to our VPC (they must be linked)
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref GroceryVPC
+
+  # ===========================================================================
+  # PUBLIC SUBNETS — Accessible from the internet
+  # Used by: Application Load Balancer (ALB) and NAT Gateway
+  # ECS containers do NOT go here — they go in private subnets
+  # ===========================================================================
+
+  # Public Subnet in AZ1 (ap-south-1a)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [0, !GetAZs '']   # First AZ in the region
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true   # Any resource here gets a public IP automatically
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-subnet-1'
+        - Key: Type
+          Value: Public
+
+  # Public Subnet in AZ2 (ap-south-1b)
+  # ALB requires subnets in at least 2 AZs for redundancy
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [1, !GetAZs '']   # Second AZ in the region
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-subnet-2'
+        - Key: Type
+          Value: Public
+
+  # ===========================================================================
+  # PRIVATE SUBNETS — No direct internet access
+  # Used by: ECS Fargate tasks running the Node.js backend
+  # Can reach internet ONLY through NAT Gateway (for npm installs, API calls)
+  # ===========================================================================
+
+  # Private Subnet in AZ1
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false   # NO public IPs — private resources only
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-subnet-1'
+        - Key: Type
+          Value: Private
+
+  # Private Subnet in AZ2
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-subnet-2'
+        - Key: Type
+          Value: Private
+
+  # ===========================================================================
+  # DATABASE SUBNETS — Most isolated, no internet access whatsoever
+  # Used by: DocumentDB / RDS (if not using MongoDB Atlas)
+  # MongoDB Atlas is external, so these subnets are for future DB migration
+  # ===========================================================================
+
+  DatabaseSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref DatabaseSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-subnet-1'
+        - Key: Type
+          Value: Database
+
+  DatabaseSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GroceryVPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref DatabaseSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-subnet-2'
+        - Key: Type
+          Value: Database
+
+  # ===========================================================================
+  # NAT GATEWAY — Allows private subnet resources to reach the internet
+  # WITHOUT exposing them to incoming internet traffic.
+  # Example: ECS container calling MongoDB Atlas (external), or fetching npm packages
+  # NAT Gateway sits in the PUBLIC subnet and forwards outbound traffic
+  # COST: ~$33/month — biggest cost item in this architecture
+  # ===========================================================================
+
+  # Elastic IP for NAT Gateway (static public IP address)
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment   # IGW must exist before EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-nat-eip'
+
+  # NAT Gateway placed in Public Subnet 1
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId   # Link to the EIP above
+      SubnetId: !Ref PublicSubnet1   # Must be in PUBLIC subnet
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-nat-gateway'
+
+  # ===========================================================================
+  # ROUTE TABLES — Define where network traffic is directed
+  # Public Route Table: routes traffic to Internet Gateway
+  # Private Route Table: routes outbound traffic to NAT Gateway
+  # ===========================================================================
+
+  # PUBLIC Route Table — for Public Subnets
+  # All traffic (0.0.0.0/0) goes to Internet Gateway → reaches internet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GroceryVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-rt'
+
+  # The default route: send all internet-bound traffic to IGW
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0        # All external traffic
+      GatewayId: !Ref InternetGateway        # Goes through Internet Gateway
+
+  # Associate Public Route Table with Public Subnet 1
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  # Associate Public Route Table with Public Subnet 2
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # PRIVATE Route Table — for Private Subnets (ECS containers)
+  # Outbound traffic goes to NAT Gateway (for MongoDB Atlas calls, etc.)
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GroceryVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-rt'
+
+  # Default route for private subnets → NAT Gateway
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0        # All external traffic
+      NatGatewayId: !Ref NatGateway          # Goes through NAT Gateway
+
+  # Associate Private Route Table with Private Subnet 1
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  # Associate Private Route Table with Private Subnet 2
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS — Values exported from this stack for use in other stacks
+# Other CloudFormation stacks (ECS, Security Groups) import these values
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  VpcId:
+    Description: The ID of the created VPC — used by Security Groups and ECS stack
+    Value: !Ref GroceryVPC
+    Export:
+      Name: !Sub '${ProjectName}-VpcId'
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID — used by ALB in ECS stack
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${ProjectName}-PublicSubnet1Id'
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID — used by ALB in ECS stack
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${ProjectName}-PublicSubnet2Id'
+
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID — used by ECS Fargate tasks
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${ProjectName}-PrivateSubnet1Id'
+
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID — used by ECS Fargate tasks
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${ProjectName}-PrivateSubnet2Id'
+
+  DatabaseSubnet1Id:
+    Description: Database Subnet 1 ID — for future DocumentDB/RDS use
+    Value: !Ref DatabaseSubnet1
+    Export:
+      Name: !Sub '${ProjectName}-DatabaseSubnet1Id'
+
+  DatabaseSubnet2Id:
+    Description: Database Subnet 2 ID — for future DocumentDB/RDS use
+    Value: !Ref DatabaseSubnet2
+    Export:
+      Name: !Sub '${ProjectName}-DatabaseSubnet2Id'
+
+  VpcCIDR:
+    Description: VPC CIDR block — used by security groups to allow internal traffic
+    Value: !Ref VpcCIDR
+    Export:
+      Name: !Sub '${ProjectName}-VpcCIDR'

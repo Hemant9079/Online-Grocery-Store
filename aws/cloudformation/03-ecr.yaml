@@ -1,0 +1,259 @@
+# =============================================================================
+# FILE: aws/cloudformation/03-ecr.yaml
+# PURPOSE: Creates Amazon ECR (Elastic Container Registry) repository
+#          to store Docker images for the Node.js backend.
+#
+# WHAT IS ECR?
+#   ECR is AWS's private Docker image registry — like Docker Hub but private.
+#   Your existing Jenkinsfile builds Docker images locally.
+#   With ECR, Jenkins pushes the image to ECR, and ECS pulls from ECR.
+#
+# CURRENT FLOW (existing):
+#   Jenkins → builds image locally → runs container on same server
+#
+# NEW FLOW (AWS):
+#   Jenkins → builds image → pushes to ECR → ECS Fargate pulls from ECR → runs
+#
+# BENEFIT: Images are versioned, stored securely, and ECS can pull latest
+#          without any SSH into servers.
+#
+# DEPLOY: aws cloudformation deploy
+#         --template-file aws/cloudformation/03-ecr.yaml
+#         --stack-name grocery-ecr
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon ECR Repository for Online Grocery Store backend Docker images.
+  Stores versioned Docker images built by Jenkins/CodeBuild.
+  ECS Fargate pulls images from here during deployment.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+    Description: Project name prefix for resource naming.
+
+  # How many old Docker image versions to keep in ECR
+  # ECR charges per GB stored — keeping fewer versions saves cost
+  ImageRetentionCount:
+    Type: Number
+    Default: 10
+    Description: >
+      Number of Docker image versions to keep in ECR.
+      Older images beyond this count are automatically deleted.
+      10 images ≈ 10 deployments of history. Reduce to 5 to save storage cost.
+
+Resources:
+
+  # ===========================================================================
+  # ECR REPOSITORY — Private Docker image registry for the backend
+  # Repository name matches existing Docker image name: grocery-backend
+  # (see Jenkinsfile: IMAGE_NAME = 'grocery-backend')
+  # ===========================================================================
+  BackendECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      # Repository name — this becomes part of the image URL
+      # Image URL format: <account-id>.dkr.ecr.ap-south-1.amazonaws.com/grocery-backend:latest
+      RepositoryName: !Sub '${ProjectName}-backend'
+
+      # ENCRYPTION: Images are encrypted at rest using AWS-managed KMS keys
+      # This satisfies the security requirement: "Encryption at Rest"
+      EncryptionConfiguration:
+        EncryptionType: AES256   # AWS-managed encryption (free, no extra setup)
+
+      # IMAGE SCANNING: Automatically scan images for security vulnerabilities
+      # When you push an image, ECR scans it for known CVEs (Common Vulnerabilities)
+      # You get a report in the AWS Console under ECR → Repositories → Scan Results
+      ImageScanningConfiguration:
+        ScanOnPush: true   # Scan every time a new image is pushed
+
+      # IMAGE TAGS: Prevent image tags from being overwritten
+      # If you push with tag "v1.0", it cannot be overwritten with a new image
+      # This ensures deployment history is preserved and rollbacks are possible
+      ImageTagMutability: MUTABLE   # MUTABLE = tags can be reused (easier for 'latest' tag)
+      # Change to IMMUTABLE if you want strict versioning (tags can never be reused)
+
+      # LIFECYCLE POLICY: Automatically delete old images to save storage costs
+      # ECR charges ~$0.10/GB/month — keeping 10 images of ~200MB each ≈ $0.20/month
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last ${ImageRetentionCount} tagged images. Delete older ones to save storage cost.",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${ImageRetentionCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Delete untagged images older than 1 day. These are intermediate build artifacts.",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-backend-ecr'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # IAM ROLE FOR JENKINS — Allows Jenkins server to push images to ECR
+  # Jenkins needs permission to:
+  #   1. Authenticate with ECR (get login token)
+  #   2. Push Docker images to the ECR repository
+  # ===========================================================================
+  JenkinsPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-jenkins-ecr-push-role'
+      Description: >
+        IAM Role for Jenkins server to push Docker images to ECR.
+        Attach this role to the EC2 instance running Jenkins,
+        or create an IAM user and add these permissions to it.
+
+      # Who can assume this role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow EC2 instances (Jenkins server) to use this role
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+
+      # INLINE POLICY: Minimum permissions needed to push to ECR
+      # This follows "Least Privilege" principle — only what's needed, nothing more
+      Policies:
+        - PolicyName: ECRPushPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              # Permission to get login token for ECR authentication
+              # This is needed to run: aws ecr get-login-password
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'   # GetAuthorizationToken must be on all resources (*)
+
+              # Permissions to push a Docker image to ECR
+              # These are repository-level permissions
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability   # Check which layers already exist
+                  - ecr:GetDownloadUrlForLayer        # Download existing layers
+                  - ecr:BatchGetImage                 # Get image manifest
+                  - ecr:InitiateLayerUpload           # Start uploading a layer
+                  - ecr:UploadLayerPart               # Upload chunks of a layer
+                  - ecr:CompleteLayerUpload           # Finish layer upload
+                  - ecr:PutImage                      # Save the final image
+                  - ecr:DescribeRepositories          # List repositories
+                  - ecr:DescribeImages                # List images in repository
+                Resource:
+                  - !GetAtt BackendECRRepository.Arn   # Only this specific repository
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-jenkins-ecr-push-role'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Instance Profile wraps the IAM Role for EC2 attachment
+  JenkinsPushInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-jenkins-ecr-push-profile'
+      Roles:
+        - !Ref JenkinsPushRole
+
+  # ===========================================================================
+  # IAM ROLE FOR ECS — Allows ECS Fargate to pull images from ECR
+  # ECS tasks need to pull the Docker image from ECR when starting up.
+  # This is the "execution role" (not the task role).
+  # ===========================================================================
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-ecs-execution-role'
+      Description: >
+        IAM Role for ECS Fargate to pull images from ECR and write logs to CloudWatch.
+        This is the ECS Task Execution Role (infrastructure role, not app role).
+        The Task Role (app permissions) is in 04-ecs-fargate.yaml.
+
+      # Allow ECS service to assume this role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+      # Attach AWS managed policy for ECS task execution
+      # This policy includes: ECR pull, CloudWatch Logs write, Secrets Manager read
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-ecs-execution-role'
+        - Key: Project
+          Value: !Ref ProjectName
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS — Export ECR repository details for use in other stacks and scripts
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  ECRRepositoryName:
+    Description: >
+      ECR Repository Name — used in Jenkins/build scripts to push images.
+      Example push command: docker push <URI>:latest
+    Value: !Ref BackendECRRepository
+    Export:
+      Name: !Sub '${ProjectName}-ECRRepositoryName'
+
+  ECRRepositoryUri:
+    Description: >
+      Full ECR Repository URI — used in Dockerfile FROM, Jenkins push, ECS Task Definition.
+      Format: <account-id>.dkr.ecr.<region>.amazonaws.com/grocery-store-backend
+    Value: !GetAtt BackendECRRepository.RepositoryUri
+    Export:
+      Name: !Sub '${ProjectName}-ECRRepositoryUri'
+
+  ECSExecutionRoleArn:
+    Description: >
+      ECS Task Execution Role ARN — used in 04-ecs-fargate.yaml Task Definition.
+      This role allows ECS to pull from ECR and write CloudWatch logs.
+    Value: !GetAtt ECSExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-ECSExecutionRoleArn'
+
+  JenkinsPushRoleArn:
+    Description: >
+      Jenkins ECR Push Role ARN — attach to Jenkins EC2 instance profile.
+      Or create IAM user and grant these permissions for Jenkins credentials.
+    Value: !GetAtt JenkinsPushRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-JenkinsPushRoleArn'

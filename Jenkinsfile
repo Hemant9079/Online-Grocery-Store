@@ -62,7 +62,7 @@ pipeline {
 
     post {
         success {
-            echo '✅ Backend deployed successfully on port 5000'
+            echo '✔️ Backend deployed successfully on port 5000'
         }
         failure {
             echo '❌ Deployment failed — check the logs above'

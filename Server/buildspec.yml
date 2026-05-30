@@ -1,0 +1,214 @@
+# =============================================================================
+# FILE: Server/buildspec.yml
+# PURPOSE: AWS CodeBuild build specification for the Node.js backend.
+#
+# ⚠️  NOTE: Your existing Jenkinsfile is UNTOUCHED and still works perfectly.
+#           This buildspec.yml is an ADDITIONAL option — for AWS CodeBuild.
+#           You can use EITHER Jenkins OR CodeBuild (or both together).
+#
+# WHAT IS buildspec.yml?
+#   It's the recipe file that tells AWS CodeBuild how to:
+#   1. Set up the build environment
+#   2. Install dependencies
+#   3. Build the Docker image
+#   4. Run tests
+#   5. Push image to ECR
+#   6. Deploy to ECS
+#
+# HOW IT WORKS WITH YOUR EXISTING JENKINS:
+#   Option A (Keep Jenkins fully): Jenkins still runs. Don't use this file.
+#   Option B (Hybrid): Jenkins triggers CodeBuild instead of building locally.
+#   Option C (Full AWS): CodePipeline replaces Jenkins. Uses this file directly.
+#
+# HOW CODEBUILD FINDS THIS FILE:
+#   CodeBuild looks for buildspec.yml in the project root OR you can specify a path.
+#   Since our Dockerfile is in Server/, this file goes in Server/ directory.
+#
+# ENVIRONMENT VARIABLES (set in CodeBuild project settings, NOT hardcoded here):
+#   AWS_ACCOUNT_ID  → Your AWS account ID
+#   AWS_REGION      → ap-south-1
+#   ECR_REPO_NAME   → grocery-store-backend
+#   ECS_CLUSTER     → grocery-store-cluster
+#   ECS_SERVICE     → grocery-store-backend-service
+# =============================================================================
+
+version: 0.2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT — Build environment configuration
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  # These variables are set in the CodeBuild Project settings (not here)
+  # Setting them here would expose them in Git history — NEVER do that
+  variables:
+    AWS_REGION: "ap-south-1"                   # Mumbai region
+    ECR_REPO_NAME: "grocery-store-backend"     # Matches 03-ecr.yaml RepositoryName
+    ECS_CLUSTER: "grocery-store-cluster"       # Matches 04-ecs-fargate.yaml ClusterName
+    ECS_SERVICE: "grocery-store-backend-service" # Matches 04-ecs-fargate.yaml ServiceName
+    CONTAINER_NAME: "grocery-store-backend"    # Matches container name in Task Definition
+
+  # These will be resolved from parameter store (more secure than env variables)
+  # Set these in AWS Systems Manager Parameter Store before running CodeBuild
+  # parameter-store:
+  #   SLACK_WEBHOOK: "/grocery-store/slack-webhook"  # Optional: Slack notifications
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASES — The actual build steps (runs in order)
+# ─────────────────────────────────────────────────────────────────────────────
+phases:
+
+  # ═══════════════════════════════════════════════════════════
+  # PHASE 1: INSTALL — Set up build tools
+  # Runs once at the beginning to install required tools.
+  # CodeBuild already has Docker and AWS CLI pre-installed.
+  # ═══════════════════════════════════════════════════════════
+  install:
+    runtime-versions:
+      nodejs: 18   # Use Node.js 18 (matches FROM node:18-alpine in Dockerfile)
+
+    commands:
+      # Print versions for debugging build issues
+      - echo "========== Build Environment =========="
+      - echo "Node.js version:  $(node --version)"
+      - echo "npm version:      $(npm --version)"
+      - echo "Docker version:   $(docker --version)"
+      - echo "AWS CLI version:  $(aws --version)"
+      - echo "Git commit:       $(git rev-parse --short HEAD)"
+      - echo "Build start time: $(date)"
+      - echo "======================================="
+
+  # ═══════════════════════════════════════════════════════════
+  # PHASE 2: PRE-BUILD — Prepare for the main build
+  # - Authenticate Docker with ECR
+  # - Set image tags
+  # ═══════════════════════════════════════════════════════════
+  pre_build:
+    commands:
+      - echo "---------- PRE-BUILD PHASE ----------"
+
+      # Get AWS Account ID dynamically (no hardcoding needed)
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - echo "AWS Account ID: ${AWS_ACCOUNT_ID}"
+
+      # Build the full ECR repository URI
+      # Format: <account>.dkr.ecr.<region>.amazonaws.com/<repo-name>
+      - ECR_REPO_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+      - echo "ECR Repository URI: ${ECR_REPO_URI}"
+
+      # Create image tags for versioning
+      # CODEBUILD_RESOLVED_SOURCE_VERSION = full git commit hash (provided by CodeBuild)
+      - GIT_HASH=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION} | cut -c1-8)  # First 8 chars
+      - BUILD_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+      - IMAGE_TAG="v${BUILD_TIMESTAMP}-${GIT_HASH}"
+      - echo "Image tag: ${IMAGE_TAG}"
+
+      # Authenticate Docker with ECR
+      # This generates a temporary login token (valid 12 hours)
+      - echo "Authenticating Docker with ECR..."
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_URI}
+      - echo "Docker authentication successful"
+
+  # ═══════════════════════════════════════════════════════════
+  # PHASE 3: BUILD — The main build process
+  # - Build Docker image from Server/Dockerfile
+  # - Run any tests (add your test commands here)
+  # ═══════════════════════════════════════════════════════════
+  build:
+    commands:
+      - echo "---------- BUILD PHASE ----------"
+
+      # Build Docker image from the Server/Dockerfile
+      # This is the same as: docker build -t grocery-backend . in Jenkinsfile
+      # --platform: Force linux/amd64 for ECS Fargate compatibility
+      - echo "Building Docker image..."
+      - docker build
+          --platform linux/amd64
+          --tag ${ECR_REPO_URI}:${IMAGE_TAG}
+          --tag ${ECR_REPO_URI}:latest
+          --file Server/Dockerfile
+          ./Server/
+
+      - echo "Docker image built successfully"
+
+      # Optional: Run backend unit tests (add test scripts to Server/package.json)
+      # Uncomment when you add tests to your project
+      # - echo "Running backend tests..."
+      # - cd Server && npm ci --only=dev && npm test && cd ..
+
+      # Print image info for logs
+      - docker image ls | grep ${ECR_REPO_NAME}
+
+  # ═══════════════════════════════════════════════════════════
+  # PHASE 4: POST-BUILD — Push image and trigger deployment
+  # - Push Docker image to ECR
+  # - Update ECS service with new image (rolling deployment)
+  # - Generate deployment artifacts
+  # ═══════════════════════════════════════════════════════════
+  post_build:
+    commands:
+      - echo "---------- POST-BUILD PHASE ----------"
+
+      # Check if build succeeded before pushing
+      # $CODEBUILD_BUILD_SUCCEEDING is 1 if all phases passed, 0 if any failed
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          echo "Build succeeded — pushing image to ECR..."
+
+          # Push versioned tag (e.g., v20240115-143022-abc12345)
+          docker push ${ECR_REPO_URI}:${IMAGE_TAG}
+          echo "Pushed versioned tag: ${IMAGE_TAG}"
+
+          # Push latest tag (ECS pulls 'latest' by default)
+          docker push ${ECR_REPO_URI}:latest
+          echo "Pushed latest tag"
+
+          # Trigger ECS rolling deployment
+          # This tells ECS to pull the new 'latest' image and update containers
+          # Zero-downtime: new containers start before old ones stop
+          echo "Triggering ECS rolling deployment..."
+          aws ecs update-service \
+            --region ${AWS_REGION} \
+            --cluster ${ECS_CLUSTER} \
+            --service ${ECS_SERVICE} \
+            --force-new-deployment \
+            --query 'service.deployments[0].{Status:status,DesiredCount:desiredCount,RunningCount:runningCount}'
+
+          echo "ECS deployment triggered successfully"
+
+          # Generate imagedefinitions.json — required by CodePipeline ECS deploy action
+          # This tells CodeDeploy which image to deploy to which container
+          printf '[{"name":"%s","imageUri":"%s"}]' \
+            ${CONTAINER_NAME} \
+            ${ECR_REPO_URI}:${IMAGE_TAG} \
+            > imagedefinitions.json
+
+          echo "imagedefinitions.json created:"
+          cat imagedefinitions.json
+
+        else
+          echo "Build FAILED — skipping ECR push and ECS deployment"
+          exit 1
+        fi
+
+      - echo "Post-build phase complete"
+      - echo "Build end time: $(date)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ARTIFACTS — Files to pass to the next CodePipeline stage
+# imagedefinitions.json is required for the ECS Deploy action in CodePipeline
+# ─────────────────────────────────────────────────────────────────────────────
+artifacts:
+  files:
+    - imagedefinitions.json   # Required by CodePipeline → ECS Deploy action
+  discard-paths: yes          # Don't include directory structure in artifact
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CACHE — Cache npm packages to speed up subsequent builds
+# CodeBuild can cache dependencies in S3 between builds
+# First build: slow (downloads everything)
+# Subsequent builds: fast (uses cache)
+# ─────────────────────────────────────────────────────────────────────────────
+cache:
+  paths:
+    - '/root/.npm/**/*'          # npm package cache
+    - 'Server/node_modules/**/*' # Node.js dependencies (if npm install runs in build)

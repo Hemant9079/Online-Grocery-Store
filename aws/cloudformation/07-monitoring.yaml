@@ -1,0 +1,528 @@
+# =============================================================================
+# FILE: aws/cloudformation/07-monitoring.yaml
+# PURPOSE: Sets up comprehensive monitoring, logging, and alerting for the
+#          Online Grocery Store on AWS using CloudWatch.
+#
+# WHAT THIS REPLACES/ADDS:
+#   Your Jenkinsfile has a basic health check: curl -f http://${HOST_IP}:5000/
+#   That's manual and only runs during deployment.
+#
+#   This creates CONTINUOUS monitoring that:
+#   - Collects CPU, memory, request count, error rate every minute
+#   - Sends email alerts when something goes wrong
+#   - Stores application logs for debugging
+#   - Shows a live dashboard in AWS Console
+#   - Tracks ALL API calls for security audit (CloudTrail)
+#
+# WHAT THIS CREATES:
+#   - SNS Topic: sends email alerts to your inbox
+#   - CloudWatch Alarms: trigger when metrics exceed thresholds
+#   - CloudWatch Dashboard: live overview of app health
+#   - CloudWatch Log Metric Filters: extract metrics from Node.js log lines
+#   - CloudTrail: audit log of all AWS API calls (who did what and when)
+#
+# DEPLOY: aws cloudformation deploy
+#         --template-file aws/cloudformation/07-monitoring.yaml
+#         --stack-name grocery-monitoring
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudWatch Monitoring, Alarms, and Logging for Online Grocery Store.
+  Provides real-time alerting, application dashboards, and audit logging.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+
+  # Email address to receive alert notifications
+  AlertEmail:
+    Type: String
+    Default: 'your-email@gmail.com'
+    Description: >
+      Email address for CloudWatch alarm notifications.
+      You will receive an email to confirm the subscription after deployment.
+      Change this to your actual email address.
+
+  # ECS Service name — needed to pull metrics from the right service
+  ECSClusterName:
+    Type: String
+    Default: 'grocery-store-cluster'
+    Description: >
+      ECS Cluster name from 04-ecs-fargate.yaml.
+      Get from: aws cloudformation describe-stacks --stack-name grocery-ecs
+      --query "Stacks[0].Outputs[?OutputKey=='ECSClusterName'].OutputValue" --output text
+
+  ECSServiceName:
+    Type: String
+    Default: 'grocery-store-backend-service'
+    Description: >
+      ECS Service name from 04-ecs-fargate.yaml.
+      Same as ECSClusterName but for the service.
+
+  # ALB ARN suffix — needed for ALB metrics
+  # Format: app/grocery-store-alb/1234abcd5678efgh
+  ALBSuffix:
+    Type: String
+    Default: 'app/grocery-store-alb/REPLACE_WITH_ACTUAL_SUFFIX'
+    Description: >
+      ALB ARN suffix for CloudWatch metrics.
+      Get from: AWS Console → EC2 → Load Balancers → grocery-store-alb → Details → ARN
+      Copy the part AFTER "loadbalancer/" — looks like: app/grocery-store-alb/1234...
+
+Resources:
+
+  # ===========================================================================
+  # SNS TOPIC — Alert notification channel
+  # All CloudWatch alarms send notifications here.
+  # SNS then forwards to email, SMS, Slack (via Lambda), etc.
+  # After deployment: check your email and CONFIRM the SNS subscription!
+  # ===========================================================================
+  AlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-alerts'
+      DisplayName: !Sub 'Grocery Store AWS Alerts'
+      # Subscribe your email address to receive alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail   # Change this to your email
+
+  # ===========================================================================
+  # CLOUDWATCH ALARMS — Automatic alerting when things go wrong
+  # Each alarm monitors a specific metric and sends alert when threshold crossed.
+  # ===========================================================================
+
+  # ALARM 1: High CPU Usage on ECS Tasks
+  # High CPU = app is overloaded, might need more containers (auto-scaling kicks in)
+  # Threshold: Alert if CPU > 80% for 3 consecutive minutes
+  ECSHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-ecs-high-cpu'
+      AlarmDescription: >
+        ECS CPU usage exceeded 80% for 3 consecutive minutes.
+        This may indicate high traffic load. Auto-scaling should add containers.
+        If this persists, check: CloudWatch → ECS Metrics → CPU Utilization.
+        Action: Verify auto-scaling is working. Check for CPU-heavy queries.
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average        # Average CPU across all running tasks
+      Period: 60                # Evaluate every 60 seconds
+      EvaluationPeriods: 3      # Alert if threshold exceeded for 3 periods (3 min)
+      Threshold: 80             # 80% CPU utilization
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching   # Don't alarm if no data (e.g., 0 tasks)
+      AlarmActions:
+        - !Ref AlertSNSTopic    # Send notification when alarm triggers
+      OKActions:
+        - !Ref AlertSNSTopic    # Also notify when alarm clears (back to normal)
+
+  # ALARM 2: High Memory Usage on ECS Tasks
+  # High memory = possible memory leak or need for bigger containers
+  # Threshold: Alert if memory > 85% for 3 minutes
+  ECSHighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-ecs-high-memory'
+      AlarmDescription: >
+        ECS Memory usage exceeded 85% for 3 consecutive minutes.
+        Possible causes: memory leak in Node.js, too many concurrent requests.
+        Action: Check Node.js heap usage. Look for memory leaks in mongoose queries.
+        If persists: increase Task Memory in 04-ecs-fargate.yaml TaskMemory parameter.
+      MetricName: MemoryUtilization
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertSNSTopic
+      OKActions:
+        - !Ref AlertSNSTopic
+
+  # ALARM 3: ALB 5xx Server Errors
+  # 5xx errors = your Node.js backend is returning 500/502/503 errors
+  # Threshold: Alert if more than 10 server errors in 1 minute
+  # A spike in 5xx = possible bug, DB connection failure, or crash
+  ALBServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-alb-5xx-errors'
+      AlarmDescription: >
+        ALB detected more than 10 HTTP 5xx server errors in the last minute.
+        5xx errors indicate server-side failures in the Node.js backend.
+        Possible causes: DB connection failed, unhandled exception, OOM crash.
+        Action: Check CloudWatch Logs → /ecs/grocery-store/backend for error logs.
+        Check ECS Service → Events tab for task crashes.
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBSuffix
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertSNSTopic
+      OKActions:
+        - !Ref AlertSNSTopic
+
+  # ALARM 4: ALB 4xx Client Errors (unusual spike)
+  # A spike in 4xx = possible security scan, bad client, or broken frontend
+  # Threshold: Alert if more than 100 client errors in 5 minutes
+  ALBClientErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-alb-4xx-spike'
+      AlarmDescription: >
+        ALB detected more than 100 HTTP 4xx client errors in 5 minutes.
+        A large spike in 4xx could indicate: security scan/attack, broken frontend
+        sending wrong requests, or expired authentication tokens.
+        Action: Review ALB access logs. Check if spike is from one IP (potential attack).
+      MetricName: HTTPCode_Target_4XX_Count
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBSuffix
+      Statistic: Sum
+      Period: 300   # 5 minute window
+      EvaluationPeriods: 1
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertSNSTopic
+
+  # ALARM 5: High ALB Response Time (latency)
+  # High latency = slow DB queries, overloaded backend, or network issues
+  # Threshold: Alert if P95 response time > 5 seconds
+  ALBHighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-alb-high-latency'
+      AlarmDescription: >
+        ALB P95 response time exceeded 5 seconds.
+        95% of requests are taking more than 5 seconds to complete.
+        Possible causes: slow MongoDB queries, unoptimized API endpoints,
+        N+1 query problem, or insufficient container resources.
+        Action: Check CloudWatch Logs for slow query warnings.
+        Look at MongoDB Atlas performance advisor for query optimization.
+      MetricName: TargetResponseTime
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBSuffix
+      ExtendedStatistic: p95   # 95th percentile response time
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5             # 5 seconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertSNSTopic
+
+  # ALARM 6: ECS Task Count Too Low
+  # If running tasks drop below minimum, service is degraded
+  # This catches cases where tasks crash and auto-scaling hasn't recovered yet
+  ECSLowTaskCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-ecs-low-task-count'
+      AlarmDescription: >
+        ECS running task count dropped below 1 for more than 2 minutes.
+        If no tasks are running, the backend API is completely down.
+        Possible causes: task crashes, deployment failure, OOM kill.
+        Action: Check ECS Service → Events. Check CloudWatch Logs for crash reason.
+        Manual fix: aws ecs update-service --cluster grocery-store-cluster
+        --service grocery-store-backend-service --desired-count 2
+      MetricName: RunningTaskCount
+      Namespace: ECS/ContainerInsights
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching   # If no data = tasks are not running = alarm!
+      AlarmActions:
+        - !Ref AlertSNSTopic
+      OKActions:
+        - !Ref AlertSNSTopic
+
+  # ===========================================================================
+  # CLOUDWATCH LOG METRIC FILTERS
+  # These extract specific patterns from Node.js logs and create metrics.
+  # Example: Count how many times "ERROR" appears in logs per minute.
+  # This lets you alarm on application-level errors (not just infra metrics).
+  # ===========================================================================
+
+  # Count errors logged by Node.js (console.error, morgan 5xx logs)
+  ErrorLogMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/backend'
+      # Pattern: match any log line containing "ERROR" or "error" (case insensitive)
+      FilterPattern: '?ERROR ?error ?Error'
+      MetricTransformations:
+        - MetricName: !Sub '${ProjectName}-application-errors'
+          MetricNamespace: !Sub '${ProjectName}/Application'
+          MetricValue: '1'   # Count each matching log line as 1 error event
+          DefaultValue: 0    # 0 errors if no matching lines in period
+
+  # Count payment errors (Razorpay failures)
+  PaymentErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/backend'
+      FilterPattern: '?payment ?Payment ?razorpay ?Razorpay'
+      MetricTransformations:
+        - MetricName: !Sub '${ProjectName}-payment-events'
+          MetricNamespace: !Sub '${ProjectName}/Application'
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # Alarm when application error rate spikes
+  ApplicationErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-application-error-spike'
+      AlarmDescription: >
+        Node.js application logged more than 20 errors in the last 5 minutes.
+        Check CloudWatch Logs for the specific error messages.
+        View logs: AWS Console → CloudWatch → Log Groups → /ecs/grocery-store/backend
+      MetricName: !Sub '${ProjectName}-application-errors'
+      Namespace: !Sub '${ProjectName}/Application'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 20
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertSNSTopic
+
+  # ===========================================================================
+  # CLOUDWATCH DASHBOARD — Visual overview of all metrics
+  # Access at: AWS Console → CloudWatch → Dashboards → grocery-store-dashboard
+  # Shows: ECS CPU/Memory, ALB requests/errors/latency, error logs
+  # ===========================================================================
+  GroceryStoreDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "# 🛒 Online Grocery Store — AWS Health Dashboard\nReal-time monitoring for ECS Backend, ALB, and Application Metrics.\n**Region**: ap-south-1 (Mumbai) | **Project**: ${ProjectName}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS CPU Utilization (%)",
+                "metrics": [
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"label": "CPU %", "color": "#FF6B6B"}]
+                ],
+                "period": 60,
+                "stat": "Average",
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"label": "Alert Threshold (80%)", "value": 80, "color": "#FF0000"}]
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS Memory Utilization (%)",
+                "metrics": [
+                  ["AWS/ECS", "MemoryUtilization", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"label": "Memory %", "color": "#4ECDC4"}]
+                ],
+                "period": 60,
+                "stat": "Average",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS Running Task Count",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"label": "Running Tasks", "color": "#45B7D1"}]
+                ],
+                "period": 60,
+                "stat": "Average",
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"label": "Minimum (1 task)", "value": 1, "color": "#FF0000"}]
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Request Count",
+                "metrics": [
+                  ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ALBSuffix}", {"label": "Total Requests", "color": "#96CEB4"}]
+                ],
+                "period": 60,
+                "stat": "Sum",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB HTTP Error Codes",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${ALBSuffix}", {"label": "5xx Server Errors", "color": "#FF6B6B"}],
+                  ["AWS/ApplicationELB", "HTTPCode_Target_4XX_Count", "LoadBalancer", "${ALBSuffix}", {"label": "4xx Client Errors", "color": "#FFD93D"}]
+                ],
+                "period": 60,
+                "stat": "Sum",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Response Time (P95)",
+                "metrics": [
+                  ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ALBSuffix}", {"label": "P95 Latency (sec)", "color": "#C44BC4", "stat": "p95"}]
+                ],
+                "period": 60,
+                "view": "timeSeries",
+                "annotations": {
+                  "horizontal": [{"label": "Alert Threshold (5s)", "value": 5, "color": "#FF0000"}]
+                }
+              }
+            },
+            {
+              "type": "log",
+              "x": 0, "y": 14, "width": 24, "height": 8,
+              "properties": {
+                "title": "Recent Node.js Application Logs",
+                "query": "SOURCE '/ecs/${ProjectName}/backend' | fields @timestamp, @message | sort @timestamp desc | limit 50",
+                "region": "ap-south-1",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+  # ===========================================================================
+  # CLOUDTRAIL — AWS API Audit Logging
+  # Records EVERY AWS API call: who did what, when, from where.
+  # Essential for security compliance and incident investigation.
+  # Example: "Someone deleted an S3 object at 2AM from IP X"
+  # ===========================================================================
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-cloudtrail-logs-${AWS::AccountId}'
+      # Keep CloudTrail logs for 90 days (compliance requirement in many orgs)
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90   # Delete logs older than 90 days
+
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Statement:
+          # CloudTrail service needs to write to this S3 bucket
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailBucket.Arn
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${CloudTrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': 'bucket-owner-full-control'
+
+  # Enable CloudTrail — record all API activity in this AWS account
+  GroceryStoreTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy   # Bucket policy must exist first
+    Properties:
+      TrailName: !Sub '${ProjectName}-trail'
+      IsLogging: true             # Start logging immediately
+      S3BucketName: !Ref CloudTrailBucket
+      IsMultiRegionTrail: false   # Only log ap-south-1 (reduces cost)
+      IncludeGlobalServiceEvents: true   # Include IAM, STS global events
+      # Log management events (create/delete/modify AWS resources)
+      EventSelectors:
+        - ReadWriteType: All           # Log both read and write API calls
+          IncludeManagementEvents: true
+          # Also log S3 data events (who accessed which files)
+          DataResources:
+            - Type: 'AWS::S3::Object'
+              Values:
+                - !Sub '${CloudTrailBucket.Arn}/'
+                - !Sub 'arn:aws:s3:::${ProjectName}-product-images-${AWS::AccountId}/'
+
+Outputs:
+
+  AlertSNSTopicArn:
+    Description: >
+      SNS Topic ARN for alerts. Subscribe additional emails/SMS/Slack here.
+      AWS Console → SNS → Topics → grocery-store-alerts → Create Subscription.
+    Value: !Ref AlertSNSTopic
+    Export:
+      Name: !Sub '${ProjectName}-AlertSNSTopicArn'
+
+  DashboardURL:
+    Description: >
+      Direct URL to the CloudWatch Dashboard.
+      Bookmark this for quick access to the monitoring dashboard.
+    Value: !Sub 'https://ap-south-1.console.aws.amazon.com/cloudwatch/home?region=ap-south-1#dashboards:name=${ProjectName}-dashboard'
+
+  LogGroupName:
+    Description: >
+      CloudWatch Log Group name for Node.js backend logs.
+      View logs: AWS Console → CloudWatch → Log Groups → /ecs/grocery-store/backend
+    Value: !Sub '/ecs/${ProjectName}/backend'
+    Export:
+      Name: !Sub '${ProjectName}-LogGroupName'

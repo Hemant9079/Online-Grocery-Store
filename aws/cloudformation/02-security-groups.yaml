@@ -1,0 +1,239 @@
+# =============================================================================
+# FILE: aws/cloudformation/02-security-groups.yaml
+# PURPOSE: Creates Security Groups (firewall rules) for all AWS resources.
+#          Security Groups are stateful firewalls attached to AWS resources.
+#          They control WHICH traffic is allowed IN and OUT of each resource.
+#
+# SECURITY MODEL FOR GROCERY STORE:
+#   Internet → ALB (port 443/80 open to everyone)
+#   ALB → ECS containers (port 5000, ONLY from ALB — not from internet)
+#   ECS → MongoDB Atlas (outbound only, Atlas handles its own firewall)
+#   ECS → AWS Services (S3, Secrets Manager, CloudWatch — via VPC endpoints or NAT)
+#
+# RULE: Each layer can ONLY be reached from the layer above it.
+#       This is called "defense in depth" or "layered security".
+#
+# DEPLOY: aws cloudformation deploy
+#         --template-file aws/cloudformation/02-security-groups.yaml
+#         --stack-name grocery-sg
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Security Groups for Online Grocery Store.
+  Implements layered security: ALB → ECS → Database.
+  Each layer only accepts traffic from the layer directly above it.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+    Description: Prefix for resource names.
+
+  # Import VPC ID from the VPC stack (Stack 01 must be deployed first)
+  VpcId:
+    Type: String
+    Description: >
+      VPC ID from the VPC stack (01-vpc.yaml).
+      Run: aws cloudformation describe-stacks --stack-name grocery-vpc
+      --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text
+
+Resources:
+
+  # ===========================================================================
+  # ALB SECURITY GROUP — Application Load Balancer firewall
+  # The ALB is the ONLY entry point from the internet to our application.
+  # It accepts HTTPS (443) and HTTP (80) from anywhere on the internet.
+  # HTTP requests are redirected to HTTPS by ALB listener rules.
+  # ===========================================================================
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-alb-sg'
+      GroupDescription: >
+        Security Group for Application Load Balancer.
+        Allows inbound HTTPS (443) and HTTP (80) from anywhere on the internet.
+        HTTP is allowed so we can redirect users to HTTPS automatically.
+      VpcId: !Ref VpcId
+
+      # INBOUND RULES — What traffic can ENTER the ALB
+      SecurityGroupIngress:
+
+        # Allow HTTPS from anywhere on the internet (IPv4)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "Allow HTTPS from internet (IPv4)"
+
+        # Allow HTTPS from anywhere on the internet (IPv6)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
+          Description: "Allow HTTPS from internet (IPv6)"
+
+        # Allow HTTP from anywhere — ALB will redirect these to HTTPS
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "Allow HTTP from internet (redirected to HTTPS by ALB)"
+
+        # Allow HTTP IPv6
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIpv6: ::/0
+          Description: "Allow HTTP IPv6 (redirected to HTTPS)"
+
+      # OUTBOUND RULES — What traffic can LEAVE the ALB
+      # ALB needs to forward requests to ECS containers on port 5000
+      SecurityGroupEgress:
+        - IpProtocol: -1          # -1 means ALL protocols
+          CidrIp: 0.0.0.0/0      # To anywhere (ALB forwards to ECS in private subnet)
+          Description: "Allow all outbound traffic from ALB to ECS targets"
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-alb-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # ECS SECURITY GROUP — Firewall for Node.js backend containers
+  # ECS containers should ONLY receive traffic from the ALB.
+  # NEVER expose port 5000 directly to the internet.
+  # This is the core backend security: ALB acts as the gatekeeper.
+  # ===========================================================================
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-ecs-sg'
+      GroupDescription: >
+        Security Group for ECS Fargate tasks running Node.js backend.
+        Inbound: ONLY from ALB Security Group on port 5000.
+        This ensures the backend is never directly accessible from the internet.
+        Outbound: Allows all traffic (for MongoDB Atlas, AWS APIs, npm).
+      VpcId: !Ref VpcId
+
+      # INBOUND RULES — Only accept traffic from ALB
+      SecurityGroupIngress:
+
+        # Allow port 5000 ONLY from the ALB Security Group
+        # This means: only the ALB can talk to the Node.js containers
+        # Even if someone knows the container's IP, they can't reach it
+        - IpProtocol: tcp
+          FromPort: 5000          # Node.js Express listens on 5000 (see Server/index.js)
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup   # ONLY from ALB
+          Description: "Allow port 5000 ONLY from ALB (Node.js Express API)"
+
+      # OUTBOUND RULES — ECS containers need to reach external services
+      SecurityGroupEgress:
+
+        # Allow HTTPS outbound for:
+        # - MongoDB Atlas (external DB on port 27017 over TLS)
+        # - AWS Secrets Manager API
+        # - AWS CloudWatch API
+        # - npm registry (if needed at runtime)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS outbound: MongoDB Atlas, AWS APIs, Secrets Manager"
+
+        # Allow MongoDB Atlas port (27017) outbound
+        # MongoDB Atlas uses TLS on port 27017
+        - IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          CidrIp: 0.0.0.0/0
+          Description: "MongoDB Atlas connection (port 27017 with TLS)"
+
+        # Allow all outbound (for flexibility — can tighten later)
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "Allow all outbound traffic from ECS (can restrict further in production)"
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-ecs-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # DATABASE SECURITY GROUP — For future DocumentDB/RDS use
+  # Currently we use MongoDB Atlas (external) which has its own security.
+  # This SG is ready for if/when you want to use AWS DocumentDB instead.
+  # Only the ECS Security Group can connect to the database.
+  # ===========================================================================
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-db-sg'
+      GroupDescription: >
+        Security Group for DocumentDB or RDS database instances.
+        Inbound: ONLY from ECS Security Group on MongoDB port 27017.
+        This is NOT used when MongoDB Atlas is external.
+        Activate this when migrating to Amazon DocumentDB.
+      VpcId: !Ref VpcId
+
+      # INBOUND RULES — Only ECS containers can connect to the database
+      SecurityGroupIngress:
+
+        # MongoDB/DocumentDB port — ONLY from ECS containers
+        - IpProtocol: tcp
+          FromPort: 27017         # MongoDB default port
+          ToPort: 27017
+          SourceSecurityGroupId: !Ref ECSSecurityGroup   # Only from backend
+          Description: "MongoDB/DocumentDB access from ECS backend only"
+
+        # PostgreSQL/MySQL port (for future RDS use)
+        - IpProtocol: tcp
+          FromPort: 5432          # PostgreSQL port
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: "PostgreSQL access from ECS backend (for future RDS)"
+
+      # OUTBOUND RULES — Databases generally don't need outbound
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "Allow outbound for DB replication and backups"
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-db-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS — Export Security Group IDs for use in ECS stack (04-ecs-fargate.yaml)
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  ALBSecurityGroupId:
+    Description: >
+      Security Group ID for the Application Load Balancer.
+      Import this in 04-ecs-fargate.yaml to attach to the ALB.
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-ALBSecurityGroupId'
+
+  ECSSecurityGroupId:
+    Description: >
+      Security Group ID for ECS Fargate tasks.
+      Import this in 04-ecs-fargate.yaml to attach to ECS service.
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-ECSSecurityGroupId'
+
+  DatabaseSecurityGroupId:
+    Description: >
+      Security Group ID for Database (DocumentDB/RDS).
+      Use this when setting up Amazon DocumentDB.
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-DatabaseSecurityGroupId'
