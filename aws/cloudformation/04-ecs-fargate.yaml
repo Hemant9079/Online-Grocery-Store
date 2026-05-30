@@ -1,0 +1,546 @@
+# =============================================================================
+# FILE: aws/cloudformation/04-ecs-fargate.yaml
+# PURPOSE: Creates the complete backend infrastructure:
+#          - ECS Cluster (where containers run)
+#          - ECS Task Definition (Docker container configuration)
+#          - ECS Service (manages running containers, replaces Jenkins 'docker run')
+#          - Application Load Balancer (public-facing HTTPS entry point)
+#          - ALB Target Group (routes traffic to healthy ECS tasks)
+#          - ALB Listeners (HTTPS:443 and HTTP:80 → redirect to HTTPS)
+#          - IAM Task Role (app-level permissions: S3, Secrets Manager)
+#          - Auto Scaling (scale containers up/down based on CPU/memory)
+#
+# HOW THIS REPLACES JENKINS DOCKER RUN:
+#   Old Jenkinsfile does:  docker run -d -p 5000:5000 --env-file ... grocery-backend
+#   This ECS service does: continuously maintains N running containers,
+#                          auto-restarts crashed containers, rolls out updates
+#                          with zero downtime (rolling deployment).
+#
+# PREREQUISITES (must deploy these stacks first):
+#   1. 01-vpc.yaml          (stack: grocery-vpc)
+#   2. 02-security-groups.yaml (stack: grocery-sg)
+#   3. 03-ecr.yaml          (stack: grocery-ecr)
+#   4. 06-secrets-manager.yaml (stack: grocery-secrets)
+#
+# DEPLOY: aws cloudformation deploy
+#         --template-file aws/cloudformation/04-ecs-fargate.yaml
+#         --stack-name grocery-ecs
+#         --capabilities CAPABILITY_NAMED_IAM
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECS Fargate Cluster + ALB for Online Grocery Store Node.js backend.
+  Replaces the Jenkins 'docker run' command with a managed, auto-scaling,
+  zero-downtime deployment on AWS Fargate (no EC2 servers to manage).
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+
+  # Docker image to run — will be updated with ECR URI after image push
+  # Format: <account-id>.dkr.ecr.ap-south-1.amazonaws.com/grocery-store-backend:latest
+  BackendImageUri:
+    Type: String
+    Description: >
+      ECR Image URI for the Node.js backend.
+      Get this from 03-ecr.yaml Output: ECRRepositoryUri.
+      Example: 123456789.dkr.ecr.ap-south-1.amazonaws.com/grocery-store-backend:latest
+
+  # Number of ECS tasks (container instances) to run
+  # 2 = one in each AZ for high availability
+  DesiredCount:
+    Type: Number
+    Default: 2
+    Description: >
+      Number of ECS tasks to run simultaneously.
+      2 = high availability (one per AZ). Use 1 for dev/demo to save cost.
+
+  # Fargate CPU units (1024 = 1 vCPU)
+  # 512 = 0.5 vCPU — good for Node.js Express API
+  TaskCpu:
+    Type: String
+    Default: '512'
+    Description: >
+      ECS Task CPU units. 256=0.25vCPU, 512=0.5vCPU, 1024=1vCPU.
+      Node.js Express is lightweight. 512 is sufficient for moderate traffic.
+
+  # Fargate Memory in MB
+  # 1024MB = 1GB — sufficient for Node.js with Mongoose
+  TaskMemory:
+    Type: String
+    Default: '1024'
+    Description: >
+      ECS Task memory in MB. Must match valid Fargate CPU/Memory combinations.
+      512 CPU → valid memory: 1024, 2048, 3072, 4096.
+
+  # ACM Certificate ARN for HTTPS
+  # Create this in AWS Certificate Manager before deploying
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: >
+      ACM SSL Certificate ARN for HTTPS on the ALB.
+      Leave empty to skip HTTPS (HTTP only — for testing only, NOT production).
+      Create certificate: AWS Console → Certificate Manager → Request Certificate.
+
+  ContainerPort:
+    Type: Number
+    Default: 5000
+    Description: >
+      Port the Node.js Express app listens on inside the container.
+      Matches EXPOSE 5000 in Server/Dockerfile and the port in Server/index.js.
+
+# Condition to enable HTTPS only if certificate ARN is provided
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+
+Resources:
+
+  # ===========================================================================
+  # IAM TASK ROLE — Application-level permissions for Node.js backend
+  # This is the role your Node.js code uses when calling AWS services.
+  # Different from the Execution Role (which is for ECS infrastructure).
+  # Your Node.js code uses this role automatically via the AWS SDK.
+  # ===========================================================================
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-ecs-task-role'
+      Description: >
+        Role for the Node.js backend container to access AWS services.
+        Grants access to: S3 (product images), Secrets Manager (env vars),
+        CloudWatch Logs (application logs), SES (email sending).
+        This is what your Node.js code uses when calling AWS SDK.
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+      Policies:
+
+        # S3 permissions — for storing/reading grocery product images
+        - PolicyName: S3ProductImagesPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject      # Read/download images
+                  - s3:PutObject      # Upload new product images
+                  - s3:DeleteObject   # Delete old images
+                  - s3:ListBucket     # List images in bucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-product-images'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-product-images/*'
+
+        # Secrets Manager permissions — read environment variables securely
+        # This replaces reading from .env files
+        - PolicyName: SecretsManagerReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue     # Read secret values
+                  - secretsmanager:DescribeSecret     # Get secret metadata
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:ap-south-1:*:secret:${ProjectName}/*'
+
+        # CloudWatch permissions — write application logs and metrics
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup    # Create log group if it doesn't exist
+                  - logs:CreateLogStream   # Create log stream per task
+                  - logs:PutLogEvents      # Write log entries
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+        # SES permissions — sending transactional emails (orders, OTPs, etc.)
+        - PolicyName: SESEmailPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail          # Send plain email
+                  - ses:SendRawEmail       # Send email with attachments/HTML
+                  - ses:SendTemplatedEmail # Send using SES templates
+                Resource: '*'
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-ecs-task-role'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # CLOUDWATCH LOG GROUP — Central logging for all ECS tasks
+  # All console.log() and console.error() from Node.js will appear here.
+  # Replaces checking Docker logs manually on the server.
+  # View logs: AWS Console → CloudWatch → Log Groups → /grocery-store/backend
+  # ===========================================================================
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}/backend'
+      # Keep logs for 30 days — balance between debugging needs and cost
+      # CloudWatch Logs cost ~$0.50/GB. Reduce retention to save money.
+      RetentionInDays: 30
+
+  # ===========================================================================
+  # ECS CLUSTER — The pool where ECS tasks (containers) run
+  # With Fargate: AWS manages the underlying EC2 servers for you.
+  # You only define CPU/memory per task — no server management needed.
+  # ===========================================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-cluster'
+
+      # Container Insights: Enhanced metrics and logs for the cluster
+      # Shows CPU, memory, network per service — great for monitoring
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled   # Costs extra (~$0.35/GB logs) but worth it for monitoring
+
+      CapacityProviders:
+        - FARGATE           # Serverless — no EC2 to manage (standard)
+        - FARGATE_SPOT      # 70% cheaper Fargate — can be interrupted (for dev/non-critical tasks)
+
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1   # Use standard Fargate by default for reliability
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-cluster'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # ECS TASK DEFINITION — Blueprint for the Node.js container
+  # This is equivalent to your 'docker run' command in Jenkinsfile but declarative.
+  # Every ECS task starts a new container based on this definition.
+  # When you deploy a new image version, you create a new Task Definition revision.
+  # ===========================================================================
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-backend'
+
+      # FARGATE: AWS manages the underlying servers — we just define CPU/memory
+      RequiresCompatibilities:
+        - FARGATE
+
+      # Networking mode for Fargate (must be awsvpc)
+      # Each task gets its own ENI (network interface) and private IP
+      NetworkMode: awsvpc
+
+      # CPU and Memory for the entire task
+      Cpu: !Ref TaskCpu       # 512 = 0.5 vCPU
+      Memory: !Ref TaskMemory # 1024 = 1 GB
+
+      # IAM Roles
+      # ExecutionRoleArn: ECS infrastructure role (pull image, write logs)
+      # TaskRoleArn: App-level role (your Node.js code's AWS permissions)
+      ExecutionRoleArn: !ImportValue !Sub '${ProjectName}-ECSExecutionRoleArn'
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+
+      # CONTAINER DEFINITIONS — defines each container in the task
+      # We have 1 container: the Node.js Express API
+      ContainerDefinitions:
+        - Name: !Sub '${ProjectName}-backend'
+
+          # Docker image from ECR — gets updated with each deployment
+          Image: !Ref BackendImageUri
+
+          # Container port mapping (same as -p 5000:5000 in docker run)
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+
+          # ENVIRONMENT VARIABLES from AWS Secrets Manager
+          # Instead of --env-file in Jenkinsfile, we reference Secrets Manager secrets
+          # These are injected at container startup — never stored in the image
+          # Secrets are fetched using the ECS Execution Role
+          Secrets:
+            - Name: MONGO_URI
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/mongo-uri:MONGO_URI::'
+            - Name: JWT_SECRET
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/jwt-secrets:JWT_SECRET::'
+            - Name: JWT_REFRESH_SECRET
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/jwt-secrets:JWT_REFRESH_SECRET::'
+            - Name: RAZORPAY_KEY_ID
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/razorpay:RAZORPAY_KEY_ID::'
+            - Name: RAZORPAY_KEY_SECRET
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/razorpay:RAZORPAY_KEY_SECRET::'
+            - Name: GOOGLE_CLIENT_ID
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/google-oauth:GOOGLE_CLIENT_ID::'
+            - Name: GOOGLE_CLIENT_SECRET
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/google-oauth:GOOGLE_CLIENT_SECRET::'
+            - Name: EMAIL_USER
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/email:EMAIL_USER::'
+            - Name: EMAIL_PASS
+              ValueFrom: !Sub 'arn:aws:secretsmanager:ap-south-1:${AWS::AccountId}:secret:${ProjectName}/email:EMAIL_PASS::'
+
+          # Plain environment variables (non-sensitive)
+          Environment:
+            - Name: NODE_ENV
+              Value: production   # Matches existing Jenkinsfile: -e NODE_ENV=production
+            - Name: PORT
+              Value: !Sub '${ContainerPort}'
+            - Name: AWS_REGION
+              Value: ap-south-1
+
+          # LOGGING — Send all container logs to CloudWatch
+          # Equivalent to 'docker logs grocery-backend-container' but in CloudWatch
+          LogConfiguration:
+            LogDriver: awslogs   # Send logs to CloudWatch Logs
+            Options:
+              awslogs-group: !Ref BackendLogGroup          # Log group created above
+              awslogs-region: ap-south-1
+              awslogs-stream-prefix: backend               # Each task gets a unique stream
+
+          # HEALTH CHECK — ECS checks this to know if the container is healthy
+          # Matches the Health Check in your existing Jenkinsfile
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - 'node -e "require(''http'').get(''http://localhost:5000/'', r => process.exit(r.statusCode === 200 ? 0 : 1))"'
+            Interval: 30      # Check every 30 seconds
+            Timeout: 10       # Fail if no response in 10 seconds
+            Retries: 3        # Mark unhealthy after 3 failures
+            StartPeriod: 60   # Grace period on startup (give Node.js time to boot)
+
+          Essential: true   # If this container crashes, the task fails and restarts
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-backend-task'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # APPLICATION LOAD BALANCER — Public-facing HTTPS entry point
+  # Replaces the public IP/port 5000 that was directly exposed.
+  # The ALB receives traffic on port 443 and forwards to ECS on port 5000.
+  # Benefits: SSL termination, health checks, zero-downtime deployments
+  # ===========================================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ProjectName}-alb'
+      Type: application    # Layer 7 load balancer (HTTP/HTTPS aware)
+      Scheme: internet-facing   # Accessible from the public internet
+
+      # Place ALB in both public subnets (required for multi-AZ)
+      Subnets:
+        - !ImportValue !Sub '${ProjectName}-PublicSubnet1Id'
+        - !ImportValue !Sub '${ProjectName}-PublicSubnet2Id'
+
+      # Attach ALB Security Group (allows 80 and 443 from internet)
+      SecurityGroups:
+        - !ImportValue !Sub '${ProjectName}-ALBSecurityGroupId'
+
+      # Access logs for the ALB — useful for debugging and compliance
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'   # Keep connections alive for 60 seconds
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-alb'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # ALB TARGET GROUP — Group of ECS tasks that receive traffic
+  # The ALB uses this group to know which containers to send requests to.
+  # Health checks happen at the Target Group level.
+  # ===========================================================================
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ProjectName}-backend-tg'
+      Port: !Ref ContainerPort    # Port 5000 (Node.js Express)
+      Protocol: HTTP              # Communication between ALB and ECS is HTTP (internal)
+      VpcId: !ImportValue !Sub '${ProjectName}-VpcId'
+      TargetType: ip              # Required for Fargate (tasks get IP addresses)
+
+      # HEALTH CHECK SETTINGS
+      # ALB continuously checks if ECS tasks are healthy
+      # Unhealthy tasks are removed from rotation automatically
+      HealthCheckEnabled: true
+      HealthCheckPath: /              # Check the root endpoint of Node.js API
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30  # Check every 30 seconds
+      HealthCheckTimeoutSeconds: 10   # Fail if no response in 10 seconds
+      HealthyThresholdCount: 2        # 2 consecutive successes = healthy
+      UnhealthyThresholdCount: 3      # 3 consecutive failures = unhealthy
+      Matcher:
+        HttpCode: '200-299'           # Any 2xx response = healthy
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-backend-tg'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # ALB LISTENER — HTTPS:443 — Primary production listener
+  # Terminates SSL (handles encryption), then forwards to Target Group
+  # Requires ACM certificate — provide CertificateArn parameter
+  # ===========================================================================
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06   # TLS 1.3 preferred (most secure)
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup   # Forward to Node.js containers
+
+  # ===========================================================================
+  # ALB LISTENER — HTTP:80 — Redirects to HTTPS
+  # Never serve content on HTTP. Always redirect to HTTPS.
+  # This is the correct security practice.
+  # ===========================================================================
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasCertificate
+          # If we have a certificate: redirect HTTP → HTTPS
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301   # Permanent redirect (browsers cache this)
+          # If no certificate yet: forward to target group (dev/testing mode)
+          - Type: forward
+            TargetGroupArn: !Ref BackendTargetGroup
+
+  # ===========================================================================
+  # ECS SERVICE — Manages running containers (replaces 'docker run' in Jenkins)
+  # The service ensures the desired number of tasks are ALWAYS running.
+  # If a container crashes, the service automatically starts a new one.
+  # Rolling updates: deploys new containers before stopping old ones (zero downtime).
+  # ===========================================================================
+  BackendECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPListener   # ALB must have a listener before ECS service attaches
+    Properties:
+      ServiceName: !Sub '${ProjectName}-backend-service'
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref DesiredCount   # Number of containers to run (default: 2)
+
+      # Launch Type: FARGATE = AWS manages servers, we just provide CPU/memory
+      LaunchType: FARGATE
+
+      # DEPLOYMENT CONFIGURATION — Zero downtime rolling update
+      # When you deploy a new image:
+      #   1. New containers start and become healthy (minimum 100% old tasks still running)
+      #   2. Traffic gradually shifts to new containers
+      #   3. Old containers are stopped
+      # Maximum 200%: during deployment, we can have up to 2x the desired count
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100   # Keep all old containers running during deploy
+        MaximumPercent: 200          # Allow starting new containers before stopping old
+
+      # Network configuration — place tasks in private subnets
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED    # Tasks in private subnets — no public IP
+          Subnets:
+            - !ImportValue !Sub '${ProjectName}-PrivateSubnet1Id'
+            - !ImportValue !Sub '${ProjectName}-PrivateSubnet2Id'
+          SecurityGroups:
+            - !ImportValue !Sub '${ProjectName}-ECSSecurityGroupId'
+
+      # Connect ECS service to the ALB Target Group
+      LoadBalancers:
+        - ContainerName: !Sub '${ProjectName}-backend'
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref BackendTargetGroup
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-backend-service'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # AUTO SCALING — Automatically add/remove containers based on load
+  # Scales out when CPU or memory is high (high traffic)
+  # Scales in when load decreases (saves cost)
+  # ===========================================================================
+
+  # Register the ECS Service as a scalable target
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1    # Minimum 1 container (saves cost when idle)
+      MaxCapacity: 10   # Maximum 10 containers (handles high traffic)
+      ResourceId: !Sub 'service/${ECSCluster}/${BackendECSService.Name}'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+
+  # Scale OUT policy: Add containers when CPU > 70%
+  ScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${ProjectName}-scale-out'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0   # Target: keep CPU usage around 70%
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 60    # Wait 60 seconds after scaling out before scaling again
+        ScaleInCooldown: 300    # Wait 5 minutes before scaling in (avoid premature scale-in)
+
+Outputs:
+
+  ALBDnsName:
+    Description: >
+      ALB DNS Name — use this as your API endpoint until you set up Route 53.
+      Example: grocery-store-alb-1234.ap-south-1.elb.amazonaws.com
+      Update frontend .env.production: VITE_API_URL=http://<ALBDnsName>
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${ProjectName}-ALBDnsName'
+
+  ECSClusterName:
+    Description: ECS Cluster name — used in deployment scripts and monitoring
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub '${ProjectName}-ECSClusterName'
+
+  ECSServiceName:
+    Description: ECS Service name — used to trigger new deployments via AWS CLI
+    Value: !GetAtt BackendECSService.Name
+    Export:
+      Name: !Sub '${ProjectName}-ECSServiceName'

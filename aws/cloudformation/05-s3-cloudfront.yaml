@@ -1,0 +1,324 @@
+# =============================================================================
+# FILE: aws/cloudformation/05-s3-cloudfront.yaml
+# PURPOSE: Hosts the React/Vite frontend (from frontend/dist/) on AWS.
+#          Creates an S3 bucket for static files and a CloudFront CDN
+#          to serve files globally with HTTPS and low latency.
+#
+# CURRENT STATE: frontend/ is a Vite + React + TypeScript app.
+#                After 'npm run build', it produces a frontend/dist/ folder
+#                with static HTML, JS, CSS files.
+#
+# WHAT THIS CREATES:
+#   - S3 Bucket (frontend): stores React build files (dist/)
+#   - S3 Bucket (images): stores grocery product images uploaded by admin
+#   - CloudFront Distribution: CDN that serves frontend globally with HTTPS
+#   - Origin Access Control: ensures S3 is ONLY accessible via CloudFront
+#   - S3 Bucket Policy: enforces that only CloudFront can read frontend files
+#
+# CURRENT SETUP vs AWS:
+#   Current: React app served by Vercel (see frontend/.env.production)
+#   AWS: React app served by S3 + CloudFront (more control, same performance)
+#
+# DEPLOY: aws cloudformation deploy
+#         --template-file aws/cloudformation/05-s3-cloudfront.yaml
+#         --stack-name grocery-frontend
+#         --capabilities CAPABILITY_NAMED_IAM
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  S3 + CloudFront for Online Grocery Store React frontend hosting.
+  Replaces Vercel with AWS-native static site hosting.
+  Also creates an S3 bucket for grocery product images.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: grocery-store
+
+  # Custom domain (optional) — e.g., www.mygrocerystore.com
+  # If you don't have a domain, leave empty and use CloudFront's default domain
+  DomainName:
+    Type: String
+    Default: ''
+    Description: >
+      Custom domain for the frontend (e.g., www.mygrocerystore.com).
+      Leave empty to use CloudFront default domain (xxx.cloudfront.net).
+      Requires ACM certificate in us-east-1 (CloudFront requires us-east-1).
+
+  # ACM Certificate for CloudFront — MUST be in us-east-1 region (CloudFront requirement)
+  # Even though our app is in ap-south-1, CloudFront certificates MUST be us-east-1
+  CloudFrontCertificateArn:
+    Type: String
+    Default: ''
+    Description: >
+      ACM SSL Certificate ARN for CloudFront HTTPS. MUST be from us-east-1 region.
+      Leave empty to use CloudFront's default SSL (no custom domain needed).
+
+Conditions:
+  HasDomain: !Not [!Equals [!Ref DomainName, '']]
+  HasCertificate: !Not [!Equals [!Ref CloudFrontCertificateArn, '']]
+
+Resources:
+
+  # ===========================================================================
+  # S3 BUCKET — Frontend Static Files
+  # Stores the output of 'npm run build' from the frontend/ directory.
+  # The dist/ folder contents go here: index.html, JS bundles, CSS, assets.
+  # This bucket is PRIVATE — only CloudFront can read it via OAC.
+  # ===========================================================================
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-frontend-${AWS::AccountId}'
+      # Account ID in name ensures global uniqueness (S3 bucket names are global)
+
+      # Block ALL public access — CloudFront will be the only way to access content
+      # This prevents accidental public exposure of files
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true        # Block public ACLs
+        BlockPublicPolicy: true      # Block public bucket policies
+        IgnorePublicAcls: true       # Ignore any existing public ACLs
+        RestrictPublicBuckets: true  # Restrict public access at bucket level
+
+      # VERSIONING: Keep old versions of files
+      # Useful for rollbacks: if you deploy bad JS, you can restore old version
+      VersioningConfiguration:
+        Status: Enabled
+
+      # ENCRYPTION: All files encrypted at rest
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256   # AWS-managed encryption (free)
+
+      # CORS: Allow the frontend to make API calls to the ALB
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ['*']     # Restrict to your domain in production
+            MaxAge: 3600
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-frontend'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # S3 BUCKET — Product Images
+  # Stores grocery product images uploaded by admin users.
+  # This bucket is PUBLIC (products images need to be viewable by customers).
+  # Images are served via CloudFront for caching and HTTPS.
+  # ===========================================================================
+  ProductImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-product-images-${AWS::AccountId}'
+
+      # CORS: Allow the React frontend to read images directly
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, HEAD, PUT, POST]   # Allow uploads from admin
+            AllowedOrigins:
+              - '*'   # Restrict to your domain in production
+            MaxAge: 3600
+
+      # VERSIONING for images (helps with rollbacks of product image updates)
+      VersioningConfiguration:
+        Status: Enabled
+
+      # ENCRYPTION
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      # LIFECYCLE: Move old image versions to cheaper storage after 90 days
+      LifecycleConfiguration:
+        Rules:
+          - Id: MoveOldVersionsToGlacier
+            Status: Enabled
+            NoncurrentVersionTransitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER   # Very cheap storage ($0.004/GB/month)
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-product-images'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # ORIGIN ACCESS CONTROL — Secures S3 → CloudFront connection
+  # OAC is the modern replacement for Origin Access Identity (OAI).
+  # It ensures S3 bucket files can ONLY be accessed through CloudFront,
+  # not by directly hitting the S3 URL.
+  # ===========================================================================
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectName}-oac'
+        Description: >
+          Origin Access Control for the grocery store frontend S3 bucket.
+          Ensures S3 is only accessible via CloudFront (not direct S3 URL).
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always    # Always sign requests to S3
+        SigningProtocol: sigv4     # Use SigV4 signing (AWS standard)
+
+  # ===========================================================================
+  # CLOUDFRONT DISTRIBUTION — Global CDN for React frontend
+  # CloudFront caches your React build files at edge locations around the world.
+  # Users in India get files from the Mumbai edge, not from S3 in ap-south-1.
+  # Benefits: Fast load times, HTTPS, DDoS protection, free SSL.
+  # ===========================================================================
+  FrontendCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub '${ProjectName} React Frontend CDN'
+        Enabled: true
+        HttpVersion: http2and3    # Use HTTP/2 and HTTP/3 (faster than HTTP/1.1)
+        IPV6Enabled: true
+        PriceClass: PriceClass_200   # Use edge locations in: NA, Europe, Asia (includes India)
+        # PriceClass_All includes all edges but costs more
+
+        # DEFAULT ROOT OBJECT — Serve index.html when user hits the root URL
+        DefaultRootObject: index.html
+
+        # ORIGINS — Where CloudFront fetches content from
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''   # Empty when using OAC (modern method)
+            OriginAccessControlId: !Ref CloudFrontOriginAccessControl
+
+        # DEFAULT CACHE BEHAVIOR — Rules for caching content
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https   # Force HTTPS
+
+          # CACHE SETTINGS
+          # Static files (JS, CSS) have content hashes in filenames (Vite does this)
+          # So they can be cached for a very long time (1 year = 31536000 seconds)
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # CachingOptimized AWS managed policy
+          # This policy: TTL min=1s, default=86400s, max=31536000s, compress=true
+
+          # Allowed HTTP methods
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+
+          # Compress files (gzip/brotli) — reduces file size ~70%, faster load
+          Compress: true
+
+        # CUSTOM ERROR RESPONSES — Required for React Router (SPA routing)
+        # When user refreshes /products/123, S3 returns 403 (file doesn't exist).
+        # We intercept that and return index.html so React Router handles routing.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html   # Serve index.html for all 403 (React Router)
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html   # Serve index.html for all 404 (React Router)
+            ErrorCachingMinTTL: 0
+
+        # CUSTOM DOMAIN — Only if DomainName parameter is provided
+        Aliases: !If
+          - HasDomain
+          - [!Ref DomainName]   # e.g., www.mygrocerystore.com
+          - !Ref 'AWS::NoValue' # No aliases if no domain
+
+        # SSL CERTIFICATE — For HTTPS on custom domain
+        ViewerCertificate: !If
+          - HasCertificate
+          - AcmCertificateArn: !Ref CloudFrontCertificateArn
+            SslSupportMethod: sni-only     # SNI = modern, free (vs dedicated IP = $600/month)
+            MinimumProtocolVersion: TLSv1.2_2021   # Minimum TLS 1.2
+          - CloudFrontDefaultCertificate: true   # Use CloudFront's free *.cloudfront.net cert
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-cloudfront'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ===========================================================================
+  # S3 BUCKET POLICY — Allows CloudFront to read frontend files
+  # Without this policy, CloudFront cannot read from the private S3 bucket.
+  # This is the "glue" that connects OAC to the bucket.
+  # ===========================================================================
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          # Allow CloudFront (identified by distribution ARN) to read S3 objects
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'   # All files in the bucket
+            Condition:
+              StringEquals:
+                # Only allow the SPECIFIC CloudFront distribution we created
+                # Prevents other CloudFront distributions from accessing our bucket
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendCloudFrontDistribution}'
+
+  # Product images bucket policy — allow public GET (customers need to see product images)
+  ProductImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ProductImagesBucket
+      PolicyDocument:
+        Statement:
+          # Allow public read for product images (customers viewing products)
+          - Sid: PublicReadForProductImages
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${ProductImagesBucket.Arn}/*'
+
+Outputs:
+
+  FrontendBucketName:
+    Description: >
+      S3 Bucket name for frontend files.
+      Upload frontend/dist/ here: aws s3 sync frontend/dist/ s3://<BucketName>/
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub '${ProjectName}-FrontendBucketName'
+
+  ProductImagesBucketName:
+    Description: >
+      S3 Bucket name for grocery product images.
+      Update Node.js backend to use this bucket for image uploads.
+    Value: !Ref ProductImagesBucket
+    Export:
+      Name: !Sub '${ProjectName}-ProductImagesBucketName'
+
+  CloudFrontDomainName:
+    Description: >
+      CloudFront distribution domain name.
+      This is the URL of your React frontend.
+      Update frontend/.env.production: this is where users access the app.
+    Value: !GetAtt FrontendCloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${ProjectName}-CloudFrontDomain'
+
+  CloudFrontDistributionId:
+    Description: >
+      CloudFront Distribution ID.
+      Used to invalidate cache after deploying new frontend:
+      aws cloudfront create-invalidation --distribution-id <ID> --paths "/*"
+    Value: !Ref FrontendCloudFrontDistribution
+    Export:
+      Name: !Sub '${ProjectName}-CloudFrontDistributionId'

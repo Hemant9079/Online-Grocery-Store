@@ -4,7 +4,7 @@ pipeline {
     environment {
         IMAGE_NAME = 'grocery-backend'
         CONTAINER_NAME = 'grocery-backend-container'
-        ENV_FILE = '/var/jenkins_home/secrets/grocery-backend.env'
+        ENV_FILE = '/var/jenkins_home/secrets/grocery-backend.env' 
     }
 
     stages {
@@ -62,10 +62,10 @@ pipeline {
 
     post {
         success {
-            echo '✅ Backend deployed successfully on port 5000'
+            echo '✔️ Backend deployed successfully on port 5000'
         }
         failure {
             echo '❌ Deployment failed — check the logs above'
         }
     }
-}
+}
