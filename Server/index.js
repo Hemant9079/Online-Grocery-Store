@@ -18,8 +18,18 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust the reverse proxy (Render, Railway, etc.)
+// Without this, Express doesn't know the connection is HTTPS,
+// so secure cookies are silently dropped by the browser.
+app.set("trust proxy", 1);
+
 // Middleware
-app.use(helmet());
+app.use(
+    helmet({
+        crossOriginResourcePolicy: { policy: "cross-origin" },
+        crossOriginOpenerPolicy: { policy: "unsafe-none" },
+    })
+);
 app.use(morgan("dev"));
 app.use(cookieParser());
 app.use(express.json());
